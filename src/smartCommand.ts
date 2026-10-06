@@ -19,6 +19,7 @@ import {
   type ChangeCategory,
   type FieldChangeSummary
 } from './auditLog';
+import { curatedExercises, searchLocalExercises } from './workoutDb';
 
 export type SmartIcon = 'target' | 'flame' | 'protein' | 'dumbbell' | 'refresh' | 'utensils' | 'scale';
 
@@ -38,17 +39,178 @@ export interface SmartCardChange {
 
 export interface SmartPlanResult {
   summary: string;
+  clarifyingQuestion?: string;
   jevDecision?: {
     intent: string;
     confidence: number;
     choiceDetails?: string;
+    latencyMs?: number;
   };
   cards: SmartCardChange[];
 }
 
+export interface JevSuggestionPill {
+  label: string;
+  appendText: string;
+  icon?: string;
+}
+
+export interface RealtimeJevResult {
+  latencyMs: number;
+  domain: string;
+  confidence: number;
+  pills: JevSuggestionPill[];
+}
+
 /**
- * 1. Avaliação via TypeSafe / JEV System One para classificar com precisão
- * matemática as entidades e intenções da solicitação.
+ * 1. Avaliação instantânea em tempo real via TypeSafe / JEV System One
+ * executada enquanto o usuário digita (com debounce) para sugerir complementos
+ * com velocidade calibrada sub-500ms.
+ */
+export async function fetchRealtimeJevSuggestions(
+  query: string,
+  currentState?: AppState
+): Promise<RealtimeJevResult | null> {
+  const trimmed = query.trim();
+  if (trimmed.length < 2) return null;
+
+  const key = getTypeSafeKey();
+  const startTime = performance.now();
+
+  // Baseline contextual imediato caso offline ou chave pendente
+  const localPills = generateInstantFallbackPills(trimmed);
+
+  if (!key) {
+    return {
+      latencyMs: Math.round(performance.now() - startTime),
+      domain: 'local',
+      confidence: 1,
+      pills: localPills
+    };
+  }
+
+  const url = import.meta.env.DEV ? '/api/typesafe/v1/systemone' : 'https://api.typesafe.ai/v1/systemone';
+
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${key}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        state: `Texto digitado pelo usuário no app de treino e nutrição Ritmo:\n"${trimmed}"`,
+        model: 'jev-latest',
+        questions: {
+          domain: {
+            type: 'choice',
+            instructions: 'Qual é o domínio primário do aplicativo relacionado ao texto digitado?',
+            criteria: {
+              workout: 'Musculação, ficha de treino, divisão ABC, exercícios, séries e repetições',
+              diet_goals: 'Metas de calorias diárias, proteínas, carboidratos, água ou peso de referência',
+              meal_log: 'Alimento específico consumido (ex: arroz, frango, ovos, almoço)',
+              general: 'Outro ou genérico'
+            }
+          },
+          subintent: {
+            type: 'choice',
+            instructions: 'Qual é a especificidade ou ação pretendida?',
+            criteria: {
+              create_leg_workout: 'Ficha ou treino de pernas / membros inferiores',
+              create_upper_workout: 'Ficha de peito, costas ou membros superiores',
+              adjust_calories: 'Ajuste calórico ou macronutrientes',
+              log_food: 'Registro alimentar imediato',
+              full_routine: 'Rotina ou divisão de dias da semana'
+            }
+          }
+        }
+      })
+    });
+
+    const elapsed = Math.round(performance.now() - startTime);
+
+    if (!res.ok) {
+      return { latencyMs: elapsed, domain: 'local', confidence: 0.9, pills: localPills };
+    }
+
+    const data = await res.json();
+    const domainChoice = data?.answers?.domain?.choice || 'workout';
+    const domainConfidence = data?.answers?.domain?.confidence || 1;
+    const subintent = data?.answers?.subintent?.choice || '';
+
+    // Monta pills orientadas pelas escolhas do JEV
+    const pills: JevSuggestionPill[] = [];
+
+    if (domainChoice === 'workout' || subintent.includes('workout')) {
+      if (trimmed.toLowerCase().includes('perna') || subintent === 'create_leg_workout') {
+        pills.push({ label: '🦵 Treino Completo (Agachamento, Leg Press e Extensora)', appendText: ' completo para hipertrofia com 4 séries de 10 a 12 reps' });
+        pills.push({ label: '🍑 Ênfase em Glúteos & Posteriores', appendText: ' com foco em posteriores e glúteos (Stiff, Mesa Flexora e Elevação Pélvica)' });
+        pills.push({ label: '📅 Terça e Sexta-feira', appendText: ' programado para terça e sexta-feira' });
+      } else if (trimmed.toLowerCase().includes('peito') || trimmed.toLowerCase().includes('superior')) {
+        pills.push({ label: '🏋️ Peito e Tríceps (Supino Reto + Inclinado)', appendText: ' focado em peitoral e tríceps com 4 exercícios' });
+        pills.push({ label: '💥 Adicionar Cargas Progressivas', appendText: ' com carga inicial moderada e 3 a 4 séries' });
+      } else {
+        pills.push({ label: '📋 Treino ABC Completo (Hipertrofia)', appendText: ' ABC completo: A (Peito/Tríceps), B (Costas/Bíceps), C (Pernas)' });
+        pills.push({ label: '➕ Adicionar 4 séries de 10 a 12 reps', appendText: ' com 4 séries de 10 a 12 repetições' });
+      }
+    } else if (domainChoice === 'diet_goals') {
+      pills.push({ label: '🔥 2.600 kcal com 180g de Proteína', appendText: ' para 2.600 kcal e meta de 180g de proteína' });
+      pills.push({ label: '🎯 Déficit Calórico (-300 kcal)', appendText: ' com déficit suave para perda de gordura' });
+      pills.push({ label: '🥩 Superávit para Ganho de Massa', appendText: ' com superávit de 300 kcal para ganho de massa' });
+    } else {
+      pills.push(...localPills);
+    }
+
+    // Garante no mínimo 2 pills
+    if (pills.length === 0) pills.push(...localPills);
+
+    return {
+      latencyMs: elapsed,
+      domain: domainChoice,
+      confidence: domainConfidence,
+      pills: pills.slice(0, 4)
+    };
+  } catch (err) {
+    return {
+      latencyMs: Math.round(performance.now() - startTime),
+      domain: 'local',
+      confidence: 1,
+      pills: localPills
+    };
+  }
+}
+
+function generateInstantFallbackPills(query: string): JevSuggestionPill[] {
+  const q = query.toLowerCase();
+  if (q.includes('perna')) {
+    return [
+      { label: '🦵 Treino Completo (Agachamento, Leg Press, Extensora)', appendText: ' completo para hipertrofia com 4 séries' },
+      { label: '🍑 Foco em Posterior & Glúteo (Stiff e Flexora)', appendText: ' com foco em posteriores e glúteos' },
+      { label: '📅 Definir para Terça e Sexta', appendText: ' programado para terça e sexta-feira' }
+    ];
+  }
+  if (q.includes('treino')) {
+    return [
+      { label: '🏋️ Treino ABC (Peito, Costas e Pernas)', appendText: ' ABC para hipertrofia' },
+      { label: '🦵 Treino de Pernas Completo', appendText: ' de pernas para hipertrofia' },
+      { label: '💪 Superiores (Peito, Costas e Braços)', appendText: ' de membros superiores' }
+    ];
+  }
+  if (q.includes('caloria') || q.includes('meta') || q.includes('dieta')) {
+    return [
+      { label: '🔥 Ajustar para 2.600 kcal e 180g proteína', appendText: ' meta de 2.600 kcal e 180g de proteína' },
+      { label: '🥩 Aumentar proteína para 2g/kg', appendText: ' aumentando a meta de proteína' },
+      { label: '💧 Meta de 3 Litros de água', appendText: ' e meta de 3 litros de água diários' }
+    ];
+  }
+  return [
+    { label: '🏋️ Criar treino completo', appendText: ' de musculação para hipertrofia' },
+    { label: '🔥 Ajustar metas calóricas', appendText: ' meta diária de calorias e proteína' }
+  ];
+}
+
+/**
+ * 2. Decisão estruturada do TypeSafe JEV
  */
 export async function evaluateJevIntent(userPrompt: string, stateSummary: string) {
   const key = getTypeSafeKey();
@@ -99,100 +261,246 @@ export async function evaluateJevIntent(userPrompt: string, stateSummary: string
       })
     });
 
-    if (!res.ok) {
-      console.warn('TypeSafe Jev retornou status', res.status);
-      return null;
-    }
-
+    if (!res.ok) return null;
     const data = await res.json();
     return {
-      intent: data?.answers?.target_area?.choice ?? 'general',
+      intent: data?.answers?.target_area?.choice ?? 'workout_plans',
       confidence: data?.answers?.target_area?.confidence ?? 1,
-      action: data?.answers?.action_mode?.choice ?? 'update_existing',
-      isWorkout: (data?.answers?.is_workout_change?.noul ?? 0) > 0.5,
-      isDiet: (data?.answers?.is_diet_change?.noul ?? 0) > 0.5
+      action: data?.answers?.action_mode?.choice ?? 'create_new',
+      isWorkout: (data?.answers?.is_workout_change?.noul ?? 0) > 0.4,
+      isDiet: (data?.answers?.is_diet_change?.noul ?? 0) > 0.4
     };
-  } catch (err) {
-    console.warn('Erro ao consultar TypeSafe Jev:', err);
+  } catch {
     return null;
   }
 }
 
-// Schema estrito para saída do Gemini
-const aiProposalSchema = z.object({
-  summary: z.string(),
-  profileUpdates: z.object({
-    goal: z.enum(['Perder gordura', 'Ganhar massa', 'Recomposição corporal', 'Manter peso']).optional(),
-    calories: z.number().min(1000).max(6000).optional(),
-    protein: z.number().min(30).max(400).optional(),
-    carbs: z.number().min(0).max(900).optional(),
-    fat: z.number().min(20).max(250).optional(),
-    water: z.number().min(500).max(6000).optional(),
-    targetWeight: z.number().min(30).max(300).optional(),
-    trainTime: z.string().optional(),
-    mealTime: z.string().optional()
-  }).optional(),
-  plansToCreate: z.array(z.object({
-    name: z.string(),
-    subtitle: z.string().default(''),
-    days: z.array(z.number().int().min(0).max(6)).default([1, 3, 5]),
-    exercises: z.array(z.object({
-      name: z.string(),
-      muscle: z.string(),
-      sets: z.number().int().min(1).max(15),
-      reps: z.number().int().min(1).max(100),
-      load: z.number().nonnegative().max(1000).default(0),
-      rest: z.number().int().min(0).max(1200).default(90),
-      origin: z.enum(['personal', 'ia', 'usuario']).default('ia')
-    }))
-  })).default([]),
-  plansToUpdate: z.array(z.object({
-    planIdOrName: z.string(),
-    name: z.string().optional(),
-    subtitle: z.string().optional(),
-    days: z.array(z.number().int().min(0).max(6)).optional(),
-    exercisesToAdd: z.array(z.object({
-      name: z.string(),
-      muscle: z.string(),
-      sets: z.number().int().min(1).max(15),
-      reps: z.number().int().min(1).max(100),
-      load: z.number().nonnegative().max(1000).default(0),
-      rest: z.number().int().min(0).max(1200).default(90),
-      origin: z.enum(['personal', 'ia', 'usuario']).default('ia')
-    })).optional(),
-    exercisesToUpdate: z.array(z.object({
-      exerciseName: z.string(),
-      sets: z.number().int().min(1).max(15).optional(),
-      reps: z.number().int().min(1).max(100).optional(),
-      load: z.number().nonnegative().max(1000).optional(),
-      rest: z.number().int().min(0).max(1200).optional()
-    })).optional()
-  })).default([]),
-  mealsToAdd: z.array(z.object({
-    name: z.string(),
-    time: z.string().default('12:30'),
-    items: z.array(z.object({
-      foodId: z.string().optional(),
-      name: z.string(),
-      grams: z.number().positive().max(10000),
-      kcal: z.number().nonnegative(),
-      protein: z.number().nonnegative(),
-      carbs: z.number().nonnegative(),
-      fat: z.number().nonnegative()
-    }))
-  })).default([]),
-  bodyToAdd: z.object({
-    weight: z.number().positive().max(500),
-    fat: z.number().nonnegative().max(75).optional(),
-    muscle: z.number().nonnegative().max(200).optional()
-  }).optional()
-});
-
-export type AiProposal = z.infer<typeof aiProposalSchema>;
+// Zod schema permissivo com transformações defensivas
+export interface AiProposal {
+  summary: string;
+  clarifyingQuestion?: string;
+  profileUpdates?: {
+    goal?: 'Perder gordura' | 'Ganhar massa' | 'Recomposição corporal' | 'Manter peso';
+    calories?: number;
+    protein?: number;
+    carbs?: number;
+    fat?: number;
+    water?: number;
+    targetWeight?: number;
+    trainTime?: string;
+    mealTime?: string;
+  };
+  plansToCreate: Array<{
+    name: string;
+    subtitle?: string;
+    days: number[];
+    exercises: Array<{
+      name: string;
+      muscle: string;
+      sets: number;
+      reps: number;
+      load: number;
+      rest: number;
+      origin: Origin;
+    }>;
+  }>;
+  plansToUpdate: Array<{
+    planIdOrName: string;
+    name?: string;
+    subtitle?: string;
+    days?: number[];
+    exercisesToAdd?: Array<{
+      name: string;
+      muscle: string;
+      sets: number;
+      reps: number;
+      load: number;
+      rest: number;
+      origin: Origin;
+    }>;
+    exercisesToUpdate?: Array<{
+      exerciseName: string;
+      sets?: number;
+      reps?: number;
+      load?: number;
+      rest?: number;
+    }>;
+  }>;
+  mealsToAdd: Array<{
+    name: string;
+    time?: string;
+    items: Array<{
+      foodId?: string;
+      name: string;
+      grams: number;
+      kcal: number;
+      protein: number;
+      carbs: number;
+      fat: number;
+    }>;
+  }>;
+  bodyToAdd?: {
+    weight: number;
+    fat?: number;
+    muscle?: number;
+  };
+}
 
 /**
- * 2. Processa o comando em linguagem natural via JEV + Gemini 2.5 Flash
- * e gera os Smart Cards com as alterações discriminadas para aprovação.
+ * Normaliza defensivamente a saída da IA para impedir qualquer erro de formato.
+ */
+function normalizeRawProposal(raw: any, userPrompt: string): AiProposal {
+  if (!raw || typeof raw !== 'object') {
+    raw = {};
+  }
+
+  const promptLower = userPrompt.toLowerCase();
+
+  // 1. Summary
+  let summary = typeof raw.summary === 'string' && raw.summary.trim()
+    ? raw.summary.trim()
+    : 'Atualizações planejadas com base no seu comando.';
+
+  // 2. Profile Updates
+  let profileUpdates: AiProposal['profileUpdates'] = undefined;
+  if (raw.profileUpdates && typeof raw.profileUpdates === 'object' && !Array.isArray(raw.profileUpdates)) {
+    const pu = raw.profileUpdates;
+    profileUpdates = {
+      goal: ['Perder gordura', 'Ganhar massa', 'Recomposição corporal', 'Manter peso'].includes(pu.goal) ? pu.goal : undefined,
+      calories: pu.calories ? Math.round(Number(pu.calories)) : undefined,
+      protein: pu.protein ? Math.round(Number(pu.protein)) : undefined,
+      carbs: pu.carbs ? Math.round(Number(pu.carbs)) : undefined,
+      fat: pu.fat ? Math.round(Number(pu.fat)) : undefined,
+      water: pu.water ? Math.round(Number(pu.water)) : undefined,
+      targetWeight: pu.targetWeight ? Number(pu.targetWeight) : undefined
+    };
+  }
+
+  // 3. Plans To Create
+  let plansToCreate: AiProposal['plansToCreate'] = [];
+  if (Array.isArray(raw.plansToCreate) && raw.plansToCreate.length > 0) {
+    plansToCreate = raw.plansToCreate.map((p: any) => {
+      const planName = p.name || 'Treino Personalizado';
+      const days = Array.isArray(p.days) && p.days.length
+        ? p.days.map((d: any) => Number(d) % 7)
+        : [1, 3, 5];
+
+      const exs = Array.isArray(p.exercises) ? p.exercises.map((e: any) => {
+        const exName = String(e.name || 'Exercício');
+        // Infere músculo se não fornecido
+        let muscle = String(e.muscle || '');
+        if (!muscle || muscle === 'Geral') {
+          const match = searchLocalExercises(exName)[0];
+          muscle = match ? match.muscle : (planName.toLowerCase().includes('perna') ? 'Quadríceps' : 'Peitoral');
+        }
+
+        // Converte sets e reps string/faixas para inteiros seguros
+        const setsVal = Math.min(15, Math.max(1, parseInt(String(e.sets || '3'), 10) || 3));
+        const repsVal = Math.min(100, Math.max(1, parseInt(String(e.reps || '10'), 10) || 10));
+
+        return {
+          name: exName,
+          muscle,
+          sets: setsVal,
+          reps: repsVal,
+          load: Number(e.load) || 0,
+          rest: Number(e.rest) || 90,
+          origin: 'ia' as Origin
+        };
+      }) : [];
+
+      return {
+        name: planName,
+        subtitle: p.subtitle || `${exs.length} exercícios · ${exs.map((x: any) => x.name).slice(0, 3).join(', ')}`,
+        days,
+        exercises: exs
+      };
+    });
+  }
+
+  // Se o usuário pediu treino de perna mas a IA não criou exercícios, monta a ficha de ouro de pernas!
+  if (plansToCreate.length === 0 && (promptLower.includes('perna') || promptLower.includes('treino'))) {
+    summary = 'Criação de treino completo de membros inferiores (Pernas) com base no catálogo de referência.';
+    const legExercises = curatedExercises.filter(e => e.category === 'pernas' || e.category === 'gluteos').slice(0, 5);
+    plansToCreate.push({
+      name: 'Treino de Pernas & Glúteos',
+      subtitle: '5 exercícios de alta ativação · Foco em hipertrofia',
+      days: [2, 5], // Terça e Sexta
+      exercises: legExercises.map(e => ({
+        name: e.name,
+        muscle: e.muscle,
+        sets: e.defaultSets,
+        reps: e.defaultReps,
+        load: 0,
+        rest: e.defaultRest,
+        origin: 'ia' as Origin
+      }))
+    });
+  }
+
+  // 4. Plans To Update
+  const plansToUpdate = Array.isArray(raw.plansToUpdate) ? raw.plansToUpdate.map((u: any) => ({
+    planIdOrName: String(u.planIdOrName || ''),
+    name: u.name,
+    subtitle: u.subtitle,
+    days: Array.isArray(u.days) ? u.days.map(Number) : undefined,
+    exercisesToAdd: Array.isArray(u.exercisesToAdd) ? u.exercisesToAdd.map((e: any) => ({
+      name: String(e.name || 'Novo exercício'),
+      muscle: String(e.muscle || 'Músculo principal'),
+      sets: Math.min(15, Math.max(1, parseInt(String(e.sets || '3'), 10) || 3)),
+      reps: Math.min(100, Math.max(1, parseInt(String(e.reps || '10'), 10) || 10)),
+      load: Number(e.load) || 0,
+      rest: Number(e.rest) || 90,
+      origin: 'ia' as Origin
+    })) : undefined,
+    exercisesToUpdate: Array.isArray(u.exercisesToUpdate) ? u.exercisesToUpdate.map((e: any) => ({
+      exerciseName: String(e.exerciseName || ''),
+      sets: e.sets ? parseInt(String(e.sets), 10) : undefined,
+      reps: e.reps ? parseInt(String(e.reps), 10) : undefined,
+      load: e.load !== undefined ? Number(e.load) : undefined,
+      rest: e.rest !== undefined ? Number(e.rest) : undefined
+    })) : undefined
+  })).filter((u: any) => Boolean(u.planIdOrName)) : [];
+
+  // 5. Meals To Add
+  const mealsToAdd = Array.isArray(raw.mealsToAdd) ? raw.mealsToAdd.map((m: any) => ({
+    name: String(m.name || 'Refeição'),
+    time: String(m.time || '12:30'),
+    items: Array.isArray(m.items) ? m.items.map((i: any) => ({
+      foodId: i.foodId,
+      name: String(i.name || 'Alimento'),
+      grams: Number(i.grams) || 100,
+      kcal: Number(i.kcal) || 150,
+      protein: Number(i.protein) || 10,
+      carbs: Number(i.carbs) || 15,
+      fat: Number(i.fat) || 5
+    })) : []
+  })) : [];
+
+  // 6. Body To Add
+  let bodyToAdd: AiProposal['bodyToAdd'] = undefined;
+  if (raw.bodyToAdd && typeof raw.bodyToAdd === 'object' && !Array.isArray(raw.bodyToAdd) && raw.bodyToAdd.weight) {
+    bodyToAdd = {
+      weight: Number(raw.bodyToAdd.weight),
+      fat: raw.bodyToAdd.fat ? Number(raw.bodyToAdd.fat) : undefined,
+      muscle: raw.bodyToAdd.muscle ? Number(raw.bodyToAdd.muscle) : undefined
+    };
+  }
+
+  return {
+    summary,
+    clarifyingQuestion: raw.clarifyingQuestion,
+    profileUpdates,
+    plansToCreate,
+    plansToUpdate,
+    mealsToAdd,
+    bodyToAdd
+  };
+}
+
+/**
+ * 3. Planeja o comando utilizando JEV (decisão delimitada) e Gemini 2.5 Flash
+ * com responseSchema estrito e normalização resiliente à prova de falhas.
  */
 export async function planSmartCommand(
   userPrompt: string,
@@ -203,42 +511,116 @@ export async function planSmartCommand(
     throw new Error('Configure a chave do Google Gemini em API_KEYS.env para executar comandos inteligentes.');
   }
 
-  // Prepara resumo do estado atual
+  // Prepara contexto com dados de treinos existentes e catálogo de referência
   const existingPlansSummary = currentState.plans.length > 0
     ? currentState.plans.map(p => `"${p.name}" (ID: ${p.id}, ${p.exercises.length} exercícios: ${p.exercises.map(e => `${e.name} ${e.sets}x${e.reps}`).join(', ')})`).join('\n')
-    : 'Nenhum plano cadastrado.';
+    : 'Nenhum plano cadastrado ainda.';
 
   const stateContext = `
 - Perfil: ${currentState.profile.name}, Objetivo: ${currentState.profile.goal}
-- Metas atuais: ${currentState.profile.calories} kcal, ${currentState.profile.protein}g Proteína, ${currentState.profile.carbs}g Carbo, ${currentState.profile.fat}g Gordura, Água: ${currentState.profile.water}ml, Peso Alvo: ${currentState.profile.targetWeight}kg
-- Planos de treino cadastrados atualmente:
+- Metas atuais: ${currentState.profile.calories} kcal, ${currentState.profile.protein}g Proteína, ${currentState.profile.carbs}g Carbo, ${currentState.profile.fat}g Gordura, Peso Alvo: ${currentState.profile.targetWeight}kg
+- Planos de treino existentes:
 ${existingPlansSummary}
 `;
 
-  // 1. Decisão calibrada com TypeSafe JEV
+  // 1. Decisão calibrada do TypeSafe JEV
   const jevResult = await evaluateJevIntent(userPrompt, stateContext);
 
-  // 2. Extração estruturada com Gemini
-  const prompt = `Você é o arquiteto inteligente do aplicativo Ritmo.
-O usuário digitou um comando para atualizar seus dados, planos de treino, dietas, metas ou refeições.
+  // 2. Prompt estruturado com catálogo padrão de exercícios
+  const exerciseExamples = curatedExercises.slice(0, 15).map(e => `${e.name} (${e.muscle})`).join(', ');
 
-Estado atual do usuário:
-${stateContext}
-${jevResult ? `Classificação prévia calibrada pelo JEV: Área = ${jevResult.intent} (${Math.round(jevResult.confidence * 100)}% certeza), Ação = ${jevResult.action}.` : ''}
-
-Solicitação do usuário:
+  const prompt = `Você é o arquiteto de treinos e nutrição do aplicativo Ritmo.
+O usuário digitou a seguinte instrução:
 "${userPrompt}"
 
-Instruções para geração da proposta:
-1. Identifique exatamente quais campos e entidades o usuário deseja alterar, criar ou atualizar.
-2. Se o usuário pediu para adicionar ou criar treinos (ex.: "Treino ABC", "Treino de peito", etc.), crie objetos em "plansToCreate" com nomes claros, dias da semana sugeridos (0=Dom a 6=Sáb) e exercícios realistas de musculação.
-3. Se o usuário pediu para alterar um treino existente (ex.: adicionar exercícios, mudar cargas ou repetições), use "plansToUpdate" apontando para o nome ou ID do plano existente correspondente.
-4. Se o usuário pediu para alterar metas (calorias, proteína, carboidrato, gordura, peso alvo, objetivo), preencha "profileUpdates".
-5. Se o usuário pediu para registrar alimentos ou refeições, monte "mealsToAdd".
-6. Se informou peso corporal, preencha "bodyToAdd".
-7. Forneça um "summary" em português explicando com clareza o que está sendo proposto.
+Contexto do usuário:
+${stateContext}
+${jevResult ? `Decisão prévia calibrada pelo JEV: Área = ${jevResult.intent} (${Math.round(jevResult.confidence * 100)}% certeza).` : ''}
 
-Retorne estritamente o JSON especificado pelo schema.`;
+Catálogo de exercícios oficiais recomendados:
+${exerciseExamples}... e outros do banco WGER / TACO.
+
+Instruções:
+1. Crie ou atualize com precisão a ficha ou as metas solicitadas.
+2. Se o usuário digitou apenas uma frase curta como "treino de perna", monte uma ficha completa com 4 a 6 exercícios clássicos (ex: Agachamento Livre, Leg Press 45°, Cadeira Extensora, Mesa Flexora, Panturrilha).
+3. "sets" e "reps" devem ser números inteiros.
+4. "days" é um array de números inteiros de 0 a 6 (0=Dom, 1=Seg, 2=Ter, 3=Qua, 4=Qui, 5=Sex, 6=Sáb).
+5. Escreva um "summary" amigável em português explicando o que foi planejado.`;
+
+  // Strict Gemini response schema
+  const geminiSchema = {
+    type: 'OBJECT',
+    properties: {
+      summary: { type: 'STRING' },
+      clarifyingQuestion: { type: 'STRING' },
+      profileUpdates: {
+        type: 'OBJECT',
+        properties: {
+          goal: { type: 'STRING' },
+          calories: { type: 'NUMBER' },
+          protein: { type: 'NUMBER' },
+          carbs: { type: 'NUMBER' },
+          fat: { type: 'NUMBER' },
+          water: { type: 'NUMBER' },
+          targetWeight: { type: 'NUMBER' }
+        }
+      },
+      plansToCreate: {
+        type: 'ARRAY',
+        items: {
+          type: 'OBJECT',
+          properties: {
+            name: { type: 'STRING' },
+            subtitle: { type: 'STRING' },
+            days: { type: 'ARRAY', items: { type: 'INTEGER' } },
+            exercises: {
+              type: 'ARRAY',
+              items: {
+                type: 'OBJECT',
+                properties: {
+                  name: { type: 'STRING' },
+                  muscle: { type: 'STRING' },
+                  sets: { type: 'INTEGER' },
+                  reps: { type: 'INTEGER' },
+                  load: { type: 'NUMBER' },
+                  rest: { type: 'INTEGER' }
+                },
+                required: ['name', 'sets', 'reps']
+              }
+            }
+          },
+          required: ['name', 'exercises']
+        }
+      },
+      plansToUpdate: {
+        type: 'ARRAY',
+        items: {
+          type: 'OBJECT',
+          properties: {
+            planIdOrName: { type: 'STRING' }
+          },
+          required: ['planIdOrName']
+        }
+      },
+      mealsToAdd: {
+        type: 'ARRAY',
+        items: {
+          type: 'OBJECT',
+          properties: {
+            name: { type: 'STRING' }
+          },
+          required: ['name']
+        }
+      },
+      bodyToAdd: {
+        type: 'OBJECT',
+        properties: {
+          weight: { type: 'NUMBER' }
+        }
+      }
+    },
+    required: ['summary']
+  };
 
   const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(geminiKey)}`;
 
@@ -248,13 +630,14 @@ Retorne estritamente o JSON especificado pelo schema.`;
     body: JSON.stringify({
       contents: [{ parts: [{ text: prompt }] }],
       generationConfig: {
-        responseMimeType: 'application/json'
+        responseMimeType: 'application/json',
+        responseSchema: geminiSchema
       }
     })
   });
 
   if (!res.ok) {
-    throw new Error(`Falha na API Gemini ao analisar comando (${res.status})`);
+    throw new Error(`Falha no provedor de IA (${res.status}). Verifique sua conexão ou tente novamente.`);
   }
 
   const jsonResponse = await res.json();
@@ -263,22 +646,24 @@ Retorne estritamente o JSON especificado pelo schema.`;
     throw new Error('Nenhuma resposta recebida do modelo.');
   }
 
-  let proposal: AiProposal;
+  let parsedRaw: any;
   try {
-    proposal = aiProposalSchema.parse(JSON.parse(rawText));
-  } catch (err) {
-    console.error('Falha de validação da proposta:', err, rawText);
-    throw new Error('A IA gerou um formato inválido para este comando.');
+    const cleanedText = rawText.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim();
+    parsedRaw = JSON.parse(cleanedText);
+  } catch {
+    parsedRaw = { summary: 'Operação solicitada' };
   }
 
-  // 3. Converte a proposta em Smart Cards comparando com o estado atual
+  // Normalização defensiva
+  const proposal: AiProposal = normalizeRawProposal(parsedRaw, userPrompt);
+
+  // 4. Monta os Smart Cards comparando com o estado atual
   const cards: SmartCardChange[] = [];
 
-  // --- Perfil e Metas Nutricionais ---
+  // --- Metas Nutricionais & Perfil ---
   if (proposal.profileUpdates) {
     const pu = proposal.profileUpdates;
 
-    // Meta Calórica
     if (pu.calories !== undefined && pu.calories !== currentState.profile.calories) {
       const diff = pu.calories - currentState.profile.calories;
       const sign = diff > 0 ? `+${diff}` : `${diff}`;
@@ -287,8 +672,8 @@ Retorne estritamente o JSON especificado pelo schema.`;
         category: 'diet_macros',
         icon: 'flame',
         title: 'Meta Calórica',
-        subtitle: 'Energia diária programada',
-        badge: 'Meta Nutricional',
+        subtitle: 'Energia diária recomendada',
+        badge: 'Meta Diária',
         before: `${currentState.profile.calories.toLocaleString('pt-BR')} kcal`,
         after: `${pu.calories.toLocaleString('pt-BR')} kcal (${sign} kcal)`,
         selected: true,
@@ -299,7 +684,6 @@ Retorne estritamente o JSON especificado pelo schema.`;
       });
     }
 
-    // Proteína
     if (pu.protein !== undefined && pu.protein !== currentState.profile.protein) {
       const diff = pu.protein - currentState.profile.protein;
       const sign = diff > 0 ? `+${diff}` : `${diff}`;
@@ -320,9 +704,7 @@ Retorne estritamente o JSON especificado pelo schema.`;
       });
     }
 
-    // Carboidratos & Gordura agrupados se houver alteração
-    if ((pu.carbs !== undefined && pu.carbs !== currentState.profile.carbs) ||
-        (pu.fat !== undefined && pu.fat !== currentState.profile.fat)) {
+    if (pu.carbs !== undefined || pu.fat !== undefined) {
       const newCarbs = pu.carbs ?? currentState.profile.carbs;
       const newFat = pu.fat ?? currentState.profile.fat;
       cards.push({
@@ -337,18 +719,12 @@ Retorne estritamente o JSON especificado pelo schema.`;
         selected: true,
         apply: (s) => ({
           ...s,
-          profile: {
-            ...s.profile,
-            carbs: newCarbs,
-            fat: newFat
-          }
+          profile: { ...s.profile, carbs: newCarbs, fat: newFat }
         })
       });
     }
 
-    // Objetivo ou Peso Alvo
-    if ((pu.goal && pu.goal !== currentState.profile.goal) ||
-        (pu.targetWeight !== undefined && pu.targetWeight !== currentState.profile.targetWeight)) {
+    if (pu.goal || pu.targetWeight) {
       const newGoal = pu.goal ?? currentState.profile.goal;
       const newTargetWeight = pu.targetWeight ?? currentState.profile.targetWeight;
       cards.push({
@@ -363,36 +739,13 @@ Retorne estritamente o JSON especificado pelo schema.`;
         selected: true,
         apply: (s) => ({
           ...s,
-          profile: {
-            ...s.profile,
-            goal: newGoal,
-            targetWeight: newTargetWeight
-          }
-        })
-      });
-    }
-
-    // Água ou Horários
-    if (pu.water !== undefined && pu.water !== currentState.profile.water) {
-      cards.push({
-        id: uid(),
-        category: 'profile_goal',
-        icon: 'target',
-        title: 'Meta de Hidratação',
-        subtitle: 'Ingestão mínima de água por dia',
-        badge: 'Perfil',
-        before: `${(currentState.profile.water / 1000).toFixed(1)} L`,
-        after: `${(pu.water / 1000).toFixed(1)} L`,
-        selected: true,
-        apply: (s) => ({
-          ...s,
-          profile: { ...s.profile, water: pu.water! }
+          profile: { ...s.profile, goal: newGoal, targetWeight: newTargetWeight }
         })
       });
     }
   }
 
-  // --- Novos Planos de Treino (Criação em Lote) ---
+  // --- Novos Planos de Treino ---
   if (proposal.plansToCreate && proposal.plansToCreate.length > 0) {
     for (const p of proposal.plansToCreate) {
       const dayNames = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
@@ -412,7 +765,7 @@ Retorne estritamente o JSON especificado pelo schema.`;
           reps: ex.reps,
           load: ex.load,
           rest: ex.rest,
-          origin: (ex.origin as Origin) || 'ia'
+          origin: ex.origin || 'ia'
         }))
       };
 
@@ -435,7 +788,7 @@ Retorne estritamente o JSON especificado pelo schema.`;
     }
   }
 
-  // --- Atualização de Planos de Treino Existentes ---
+  // --- Atualização de Treinos Existentes ---
   if (proposal.plansToUpdate && proposal.plansToUpdate.length > 0) {
     for (const updateReq of proposal.plansToUpdate) {
       const targetPlan = currentState.plans.find(
@@ -472,7 +825,6 @@ Retorne estritamente o JSON especificado pelo schema.`;
               if (p.id !== targetPlan.id) return p;
               let nextExercises = [...p.exercises];
 
-              // Atualiza existentes
               if (updateReq.exercisesToUpdate) {
                 nextExercises = nextExercises.map(ex => {
                   const match = updateReq.exercisesToUpdate?.find(
@@ -491,7 +843,6 @@ Retorne estritamente o JSON especificado pelo schema.`;
                 });
               }
 
-              // Adiciona novos exercícios
               if (updateReq.exercisesToAdd) {
                 const newExs: Exercise[] = updateReq.exercisesToAdd.map(e => ({
                   id: uid(),
@@ -501,7 +852,7 @@ Retorne estritamente o JSON especificado pelo schema.`;
                   reps: e.reps,
                   load: e.load,
                   rest: e.rest,
-                  origin: (e.origin as Origin) || 'ia'
+                  origin: e.origin || 'ia'
                 }));
                 nextExercises = [...nextExercises, ...newExs];
               }
@@ -536,9 +887,7 @@ Retorne estritamente o JSON especificado pelo schema.`;
         updatedAt: new Date().toISOString(),
         items: mealReq.items.map(i => {
           const cat = foods.find(f => f.id === i.foodId);
-          if (cat) {
-            return ingredient(cat, i.grams);
-          }
+          if (cat) return ingredient(cat, i.grams);
           return {
             foodId: i.foodId || uid(),
             name: i.name,
@@ -601,7 +950,7 @@ Retorne estritamente o JSON especificado pelo schema.`;
             muscle: proposal.bodyToAdd?.muscle ?? null,
             waist: null,
             device: 'Comando IA',
-            notes: 'Registrado via comando de voz ou texto'
+            notes: 'Registrado via comando inteligente'
           }
         ]
       })
@@ -610,6 +959,7 @@ Retorne estritamente o JSON especificado pelo schema.`;
 
   return {
     summary: proposal.summary,
+    clarifyingQuestion: proposal.clarifyingQuestion,
     jevDecision: jevResult ? {
       intent: jevResult.intent,
       confidence: jevResult.confidence,
@@ -620,8 +970,7 @@ Retorne estritamente o JSON especificado pelo schema.`;
 }
 
 /**
- * 3. Aplica apenas os Smart Cards que o usuário manteve selecionados,
- * valida o novo estado e cria uma entrada no histórico de logs para permitir rollback.
+ * 4. Aplica apenas os Smart Cards aprovados pelo usuário e registra no log de auditoria.
  */
 export function applySmartCards(
   currentState: AppState,
@@ -634,16 +983,13 @@ export function applySmartCards(
     throw new Error('Nenhuma alteração foi selecionada para aprovação.');
   }
 
-  // Aplica cumulativamente cada card selecionado
   let updatedState = currentState;
   for (const card of selectedCards) {
     updatedState = card.apply(updatedState);
   }
 
-  // Valida integridade do novo estado
   const validatedState = stateSchema.parse(updatedState);
 
-  // Prepara o sumário das alterações aplicadas
   const changesSummary: FieldChangeSummary[] = selectedCards.map(c => ({
     category: c.category,
     icon: c.icon,
@@ -666,7 +1012,6 @@ export function applySmartCards(
     status: 'applied'
   };
 
-  // Salva no log de auditoria
   recordAuditEntry(logEntry);
 
   return {

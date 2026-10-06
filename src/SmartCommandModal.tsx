@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   Sparkles,
   Check,
@@ -13,15 +13,19 @@ import {
   AlertCircle,
   Loader2,
   ChevronRight,
-  ShieldCheck
+  ShieldCheck,
+  Zap,
+  HelpCircle
 } from 'lucide-react';
 import { type AppState } from './domain';
 import {
   planSmartCommand,
   applySmartCards,
+  fetchRealtimeJevSuggestions,
   type SmartPlanResult,
   type SmartCardChange,
-  type SmartIcon
+  type SmartIcon,
+  type RealtimeJevResult
 } from './smartCommand';
 import { type AuditLogEntry } from './auditLog';
 import { Modal } from './components';
@@ -45,12 +49,38 @@ export function SmartCommandModal({
   const [error, setError] = useState('');
   const [planResult, setPlanResult] = useState<SmartPlanResult | null>(null);
   const [cards, setCards] = useState<SmartCardChange[]>([]);
+  const [realtimeJev, setRealtimeJev] = useState<RealtimeJevResult | null>(null);
+  const [jevBusy, setJevBusy] = useState(false);
+
+  useEffect(() => {
+    const trimmed = prompt.trim();
+    if (trimmed.length < 2) {
+      setRealtimeJev(null);
+      return;
+    }
+
+    const timer = setTimeout(async () => {
+      setJevBusy(true);
+      try {
+        const res = await fetchRealtimeJevSuggestions(trimmed, currentState);
+        if (res && res.pills.length > 0) {
+          setRealtimeJev(res);
+        }
+      } catch (err) {
+        console.warn('Realtime Jev suggestion error:', err);
+      } finally {
+        setJevBusy(false);
+      }
+    }, 200);
+
+    return () => clearTimeout(timer);
+  }, [prompt]);
 
   const examplePrompts = [
     { label: '🏋️ Treino ABC completo', text: 'Crie uma ficha de treino ABC completa para hipertrofia: Treino A (Peito e Tríceps), Treino B (Costas e Bíceps), Treino C (Pernas completo).' },
+    { label: '🦵 Treino de Perna', text: 'Treino de perna completo para hipertrofia com agachamento livre, leg press e flexora' },
     { label: '🔥 Ajustar calorias e proteína', text: 'Ajuste minha meta diária para 2.600 kcal com 180g de proteína e 250g de carboidratos.' },
-    { label: '🎯 Mudar objetivo e peso alvo', text: 'Mude meu objetivo para Ganhar massa e peso de referência para 82 kg.' },
-    { label: '🥗 Registrar almoço fit', text: 'Registrar meu almoço de hoje: 200g de peito de frango grelhado, 150g de arroz branco e 100g de feijão carioca.' }
+    { label: '🎯 Mudar objetivo e peso alvo', text: 'Mude meu objetivo para Ganhar massa e peso de referência para 82 kg.' }
   ];
 
   async function handleAnalyze() {
@@ -131,14 +161,41 @@ export function SmartCommandModal({
               <textarea
                 id="smart-prompt-input"
                 className="smart-cmd-textarea"
-                placeholder="Exemplo: 'Adicione um treino de costas na quarta com puxada e remada, aumente as calorias para 2.600 kcal e meta de proteína para 180g.'"
+                placeholder="Exemplo: 'treino de perna', 'Adicione um treino de costas na quarta', 'ajuste as calorias para 2.600 kcal'..."
                 value={prompt}
                 onChange={e => { setPrompt(e.target.value); setError(''); }}
-                rows={4}
+                rows={3}
                 disabled={loading}
               />
+
+              {realtimeJev && realtimeJev.pills.length > 0 && (
+                <div className="jev-realtime-panel">
+                  <div className="jev-realtime-badge">
+                    <Zap size={13} style={{ color: '#fbbf24' }} />
+                    <span>
+                      JEV Instantâneo ({realtimeJev.latencyMs}ms) · {Math.round(realtimeJev.confidence * 100)}% certeza
+                    </span>
+                  </div>
+                  <div className="jev-realtime-pills">
+                    {realtimeJev.pills.map((pill, i) => (
+                      <button
+                        key={i}
+                        type="button"
+                        className="jev-realtime-pill"
+                        onClick={() => {
+                          setPrompt(prev => prev.trim() + (pill.appendText.startsWith(' ') ? '' : ' ') + pill.appendText);
+                          setError('');
+                        }}
+                      >
+                        {pill.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               <div className="smart-cmd-examples">
-                <span>Sugestões rápidas:</span>
+                <span>Modelos prontos:</span>
                 {examplePrompts.map(ex => (
                   <button
                     key={ex.label}
