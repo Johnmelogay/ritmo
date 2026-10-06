@@ -1,0 +1,306 @@
+/* ==============================================================================
+   RITMO — ONBOARDING & AUTHENTICATION STYLES
+   ============================================================================== */
+
+/* Modal Overlays */
+.onboarding-modal {
+  max-width: 620px;
+  border-radius: 20px;
+  overflow: hidden;
+  background: #ffffff;
+  border: 1px solid #e2e8dc;
+  box-shadow: 0 30px 100px rgba(18, 40, 28, 0.22);
+}
+
+.onboarding-top-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 26px 14px;
+  border-bottom: 1px solid #edf1e7;
+}
+
+.onboarding-steps-indicator {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.onboarding-dot {
+  width: 24px;
+  height: 4px;
+  border-radius: 4px;
+  background: #e2e8dc;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.onboarding-dot.active {
+  background: #285b49;
+  width: 38px;
+}
+
+.onboarding-step-counter {
+  font-size: 11px;
+  font-weight: 600;
+  color: #7d8f76;
+  margin-left: 10px;
+}
+
+.onboarding-skip-btn {
+  font-size: 12px;
+  font-weight: 600;
+  color: #8c9883;
+  padding: 6px 12px;
+  border-radius: 6px;
+  background: transparent;
+  transition: all 0.15s ease;
+}
+
+.onboarding-skip-btn:hover {
+  background: #f1f4ed;
+  color: #3b5239;
+}
+
+/* Card Content Area */
+.onboarding-card {
+  padding: 32px 32px 24px;
+  display: flex;
+  flex-direction: column;
+  animation: fadeInStep 0.25s ease-out;
+}
+
+@keyframes fadeInStep {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.onboarding-icon-wrap {
+  width: 64px;
+  height: 64px;
+  border-radius: 18px;
+  display: grid;
+  place-items: center;
+  margin-bottom: 22px;
+  color: #245548;
+  background: linear-gradient(135deg, #eef5e8 0%, #d8ebd2 100%);
+  border: 1px solid #c9dec1;
+  box-shadow: 0 8px 24px rgba(40, 91, 73, 0.08);
+}
+
+.onboarding-icon-wrap.orange {
+  color: #b36e32;
+  background: linear-gradient(135deg, #fff3e6 0%, #f7dfc5 100%);
+  border-color: #ebd0b3;
+}
+
+.onboarding-icon-wrap.purple {
+  color: #69548f;
+  background: linear-gradient(135deg, #f5efff 0%, #e2d4fa 100%);
+  border-color: #d1c0ed;
+}
+
+.onboarding-icon-wrap.blue {
+  color: #386b85;
+  background: linear-gradient(135deg, #eaf5fc 0%, #cae5f5 100%);
+  border-color: #b7d6ea;
+}
+
+.onboarding-card h2 {
+  font-size: 24px;
+  letter-spacing: -0.8px;
+  color: #1f3627;
+  margin-bottom: 10px;
+  line-height: 1.25;
+}
+
+.onboarding-card .onboarding-subtitle {
+  font-size: 13.5px;
+  line-height: 1.65;
+  color: #697864;
+  margin-bottom: 24px;
+}
+
+/* Feature Highlights Grid */
+.onboarding-highlights {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  background: #f7faf4;
+  border: 1px solid #e4ecd9;
+  border-radius: 12px;
+  padding: 16px 18px;
+  margin-bottom: 12px;
+}
+
+.onboarding-highlight-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: #3f5540;
+}
+
+.onboarding-highlight-item svg {
+  color: #285b49;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.onboarding-highlight-item strong {
+  color: #1e3524;
+}
+
+/* Footer & Navigation */
+.onboarding-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 32px 24px;
+  border-top: 1px solid #edf1e7;
+  background: #fafbf9;
+}
+
+.onboarding-footer-btns {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-left: auto;
+}
+
+/* Auth Modal Styles */
+.auth-modal-card {
+  max-width: 460px;
+  border-radius: 18px;
+}
+
+.auth-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  background: #edf1e7;
+  border-radius: 9px;
+  padding: 4px;
+  margin-bottom: 22px;
+}
+
+.auth-tab-btn {
+  padding: 9px 14px;
+  border-radius: 7px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #6b7a66;
+  text-align: center;
+  transition: all 0.15s ease;
+}
+
+.auth-tab-btn.active {
+  background: #ffffff;
+  color: #245548;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+}
+
+.google-auth-btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 11px 16px;
+  border: 1px solid #dbe2d4;
+  background: #ffffff;
+  border-radius: 8px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #314234;
+  margin-bottom: 18px;
+  transition: all 0.15s ease;
+}
+
+.google-auth-btn:hover {
+  background: #f7faf3;
+  border-color: #c4d2ba;
+}
+
+.auth-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 16px 0 18px;
+  color: #9cb093;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1px;
+}
+
+.auth-divider::before,
+.auth-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: #e2ead9;
+}
+
+.password-input-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.password-toggle-btn {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  color: #8c9c84;
+  padding: 4px;
+  cursor: pointer;
+}
+
+.password-toggle-btn:hover {
+  color: #3b5239;
+}
+
+.ai-status-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.ai-status-pill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: #f4f8ef;
+  border: 1px solid #dce8d3;
+  font-size: 11px;
+  font-weight: 550;
+  color: #3e5c3e;
+}
+
+.ai-status-pill.offline {
+  background: #faf4f2;
+  border-color: #eddcd7;
+  color: #96675d;
+}
+
+.ai-status-pill .indicator {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #4caf50;
+}
+
+.ai-status-pill.offline .indicator {
+  background: #d97561;
+}

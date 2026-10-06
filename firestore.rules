@@ -1,0 +1,21 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function owner(userId) {
+      return request.auth != null && request.auth.uid == userId;
+    }
+    match /users/{userId}/records/{recordId} {
+      allow read, delete: if owner(userId);
+      allow create, update: if owner(userId)
+        && request.resource.data.keys().hasOnly(['kind', 'payload', 'updatedAt'])
+        && request.resource.data.keys().hasAll(['kind', 'payload', 'updatedAt'])
+        && request.resource.data.kind in ['profile', 'meta', 'meals', 'plans', 'sessions', 'body', 'recovery']
+        && request.resource.data.payload is map
+        && request.resource.data.updatedAt is string
+        && request.resource.data.updatedAt.size() <= 40;
+    }
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
