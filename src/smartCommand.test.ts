@@ -163,7 +163,87 @@ describe('Smart Command Card Approval & State Mutations', () => {
     expect(result.bmi).toBe(25.9);
     // Water = 82 * 40 = 3280ml
     expect(result.water).toBe(3280);
-    // Target weight for ~13% fat = 65.6 / 0.87 = ~75kg
     expect(result.targetWeight).toBe(75);
   });
+
+  it('plans changes from multimodal attached screenshot with OCR data', async () => {
+    const initial: AppState = emptyState();
+    
+    // Mock global fetch for Gemini API
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (url: RequestInfo | URL, init?: RequestInit) => {
+      const urlStr = String(url);
+      if (urlStr.includes('generativelanguage.googleapis.com')) {
+        const bodyStr = String(init?.body || '');
+        // Verify inlineData part was sent
+        expect(bodyStr).toContain('inlineData');
+        expect(bodyStr).toContain('image/png');
+        expect(bodyStr).toContain('fake-base64-data');
+        
+        return {
+          ok: true,
+          json: async () => ({
+            candidates: [
+              {
+                content: {
+                  parts: [
+                    {
+                      text: JSON.stringify({
+                        summary: 'Laudo InBody lido com sucesso: 82kg, 20% gordura e 1.78m.',
+                        bodyToAdd: {
+                          weight: 82,
+                          fat: 20,
+                          muscle: 37,
+                          height: 178
+                        },
+                        profileUpdates: {
+                          name: 'Matheus',
+                          goal: 'Perder gordura',
+                          calories: 2140,
+                          protein: 160,
+                          carbs: 230,
+                          fat: 65,
+                          water: 3300,
+                          targetWeight: 75
+                        }
+                      })
+                    }
+                  ]
+                }
+              }
+            ]
+          })
+        } as Response;
+      }
+      return originalFetch(url, init);
+    };
+
+    try {
+      const { planSmartCommand } = await import('./smartCommand');
+      const plan = await planSmartCommand(
+        '', // Empty prompt, relying on attached image
+        initial,
+        {
+          data: 'fake-base64-data',
+          mimeType: 'image/png',
+          name: 'inbody_exam.png',
+          previewUrl: 'data:image/png;base64,fake-base64-data'
+        }
+      );
+
+      expect(plan.cards.length).toBeGreaterThan(0);
+      const bioCard = plan.cards.find(c => c.category === 'body_metric');
+      expect(bioCard).toBeDefined();
+      expect(bioCard?.title).toBe('Nova Avaliação de Bioimpedância');
+      expect(bioCard?.after).toContain('82 kg');
+      expect(bioCard?.after).toContain('20% gordura');
+
+      const nameCard = plan.cards.find(c => c.title === 'Nome no Perfil');
+      expect(nameCard).toBeDefined();
+      expect(nameCard?.after).toBe('Matheus');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
 });
+

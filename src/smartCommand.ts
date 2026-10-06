@@ -56,6 +56,14 @@ export interface JevSuggestionPill {
   icon?: string;
 }
 
+export interface AttachedMedia {
+  data: string;
+  mimeType: string;
+  name?: string;
+  previewUrl?: string;
+  sizeBytes?: number;
+}
+
 export interface RealtimeJevResult {
   latencyMs: number;
   domain: string;
@@ -781,11 +789,20 @@ function normalizeRawProposal(
  */
 export async function planSmartCommand(
   userPrompt: string,
-  currentState: AppState
+  currentState: AppState,
+  attachedMedia?: AttachedMedia | null
 ): Promise<SmartPlanResult> {
   const geminiKey = getGeminiKey();
   if (!geminiKey) {
     throw new Error('Configure a chave do Google Gemini em API_KEYS.env para executar comandos inteligentes.');
+  }
+
+  const effectivePrompt = (userPrompt || '').trim() || (attachedMedia
+    ? 'Analise a imagem anexada (laudo de bioimpedância, ficha de treino ou plano nutricional) e extraia todos os dados relevantes para configurar perfil, metas, treinos ou refeições.'
+    : '');
+
+  if (!effectivePrompt && !attachedMedia) {
+    throw new Error('Digite uma instrução ou anexe uma imagem para analisar.');
   }
 
   const existingPlansSummary = currentState.plans.length > 0
@@ -806,14 +823,45 @@ ${existingPlansSummary}
 `;
 
   // 1. Decisão calibrada do TypeSafe JEV
-  const jevResult = await evaluateJevIntent(userPrompt, stateContext);
+  const jevPrompt = attachedMedia ? `[Imagem anexada: laudo/ficha] ${effectivePrompt}` : effectivePrompt;
+  const jevResult = await evaluateJevIntent(jevPrompt, stateContext);
 
   // 2. Prompt estruturado com instruções científicas de nutrição e bioimpedância
   const exerciseExamples = curatedExercises.slice(0, 15).map(e => `${e.name} (${e.muscle})`).join(', ');
 
+  const imageInstructions = attachedMedia ? `
+==================================================
+DIRETRIZES MULTIMODAIS - IMAGEM/PRINT ANEXADO:
+O usuário enviou uma imagem (screenshot de bioimpedância InBody/Tanita, foto de ficha de treino ou foto de plano nutricional).
+Realize OCR de alta precisão e análise visual profunda:
+1. SE FOR LAUDO DE BIOIMPEDÂNCIA / EXAME FÍSICO:
+   - Extraia rigorosamente:
+     * weight: peso corporal total (kg)
+     * fat: percentual de gordura corporal (% de gordura / PGC / BF)
+     * muscle: massa muscular esquelética (kg)
+     * fatFreeMass: massa livre de gordura / massa magra (kg)
+     * fatMass: massa de gordura corporal (kg)
+     * height: estatura / altura (cm)
+     * bmi: IMC (kg/m²)
+     * basalMetabolism: taxa metabólica basal / TMB / BMR (kcal)
+   - Preencha "bodyToAdd" com todos esses números exatos.
+   - Com base nos dados do laudo, preencha "profileUpdates" com:
+     * calories: meta calórica ideal (com base na TMB e objetivo, aplicando déficit para emagrecimento/recomposição ou superávit para ganho de massa)
+     * protein: meta de proteína calibrada (~2.2g/kg de massa magra)
+     * carbs: carboidratos equilibrados
+     * fat: lipídios saudáveis (~0.8g/kg)
+     * water: ingestão hídrica (~40ml/kg de peso corporal)
+     * targetWeight: peso meta
+2. SE FOR FICHA DE TREINO (academia, folha ou aplicativo):
+   - Extraia cada exercício, grupos musculares, séries (sets), repetições (reps) e tempo de descanso.
+   - Adicione em "plansToCreate" com nomes claros e organizados.
+3. SE FOR PLANO ALIMENTAR OU CARDÁPIO:
+   - Extraia as refeições para "mealsToAdd" e ajuste as metas diárias de calorias e macros em "profileUpdates".
+==================================================` : '';
+
   const prompt = `Você é o arquiteto de treinos e nutrição do aplicativo Ritmo.
-O usuário digitou a seguinte instrução:
-"${userPrompt}"
+O usuário enviou a seguinte instrução:
+"${effectivePrompt}"
 
 Contexto do usuário:
 ${stateContext}
@@ -837,7 +885,7 @@ INSTRUÇÕES CRÍTICAS PARA PERFIL, METAS E BIOIMPEDÂNCIA:
 4. Se o usuário pedir para preencher o perfil ou fizer uma triagem:
    - Preencha TODOS os campos de profileUpdates para dar uma picture completa.
 5. Se o usuário pedir ficha ou treino: crie a lista de exercícios com sets e reps inteiros.
-6. Escreva um "summary" amigável e explicativo em português detalhando a estratégia adotada.`;
+6. Escreva um "summary" amigável e explicativo em português detalhando a estratégia adotada.${imageInstructions}`;
 
   const geminiSchema = {
     type: 'OBJECT',
@@ -922,11 +970,22 @@ INSTRUÇÕES CRÍTICAS PARA PERFIL, METAS E BIOIMPEDÂNCIA:
 
   const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(geminiKey)}`;
 
+  const contentParts: any[] = [];
+  if (attachedMedia && attachedMedia.data) {
+    contentParts.push({
+      inlineData: {
+        mimeType: attachedMedia.mimeType,
+        data: attachedMedia.data
+      }
+    });
+  }
+  contentParts.push({ text: prompt });
+
   const res = await fetch(endpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }],
+      contents: [{ parts: contentParts }],
       generationConfig: {
         responseMimeType: 'application/json',
         responseSchema: geminiSchema
@@ -953,7 +1012,7 @@ INSTRUÇÕES CRÍTICAS PARA PERFIL, METAS E BIOIMPEDÂNCIA:
   }
 
   // Normalização defensiva com motor científico
-  const proposal: AiProposal = normalizeRawProposal(parsedRaw, userPrompt, currentState);
+  const proposal: AiProposal = normalizeRawProposal(parsedRaw, effectivePrompt, currentState);
 
   // 4. Monta os Smart Cards comparando com o estado atual
   const cards: SmartCardChange[] = [];

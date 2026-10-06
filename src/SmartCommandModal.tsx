@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useRef } from 'react';
 import {
   Sparkles,
   Check,
@@ -12,18 +12,19 @@ import {
   AlertCircle,
   Loader2,
   ShieldCheck,
-  Zap,
-  Plus
+  Camera,
+  Upload,
+  Trash2,
+  FileImage
 } from 'lucide-react';
 import { type AppState } from './domain';
 import {
   planSmartCommand,
   applySmartCards,
-  fetchRealtimeJevSuggestions,
   type SmartPlanResult,
   type SmartCardChange,
   type SmartIcon,
-  type RealtimeJevResult
+  type AttachedMedia
 } from './smartCommand';
 import { type AuditLogEntry } from './auditLog';
 import { Modal } from './components';
@@ -47,66 +48,100 @@ export function SmartCommandModal({
   const [error, setError] = useState('');
   const [planResult, setPlanResult] = useState<SmartPlanResult | null>(null);
   const [cards, setCards] = useState<SmartCardChange[]>([]);
-  const [realtimeJev, setRealtimeJev] = useState<RealtimeJevResult | null>(null);
+  const [attachedImage, setAttachedImage] = useState<AttachedMedia | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  useEffect(() => {
-    const trimmed = prompt.trim();
-    if (trimmed.length < 2) {
-      setRealtimeJev(null);
+  function processImageFile(file: File) {
+    if (!file.type.startsWith('image/')) {
+      setError('Por favor selecione um arquivo de imagem válido (PNG, JPG, WebP).');
       return;
     }
-
-    const timer = setTimeout(async () => {
-      try {
-        const res = await fetchRealtimeJevSuggestions(trimmed, currentState);
-        if (res && res.pills.length > 0) {
-          setRealtimeJev(res);
-        }
-      } catch (err) {
-        console.warn('Realtime Jev suggestion error:', err);
-      }
-    }, 200);
-
-    return () => clearTimeout(timer);
-  }, [prompt]);
-
-  const examplePrompts = [
-    {
-      title: '👤 Matheus: Ganhar Massa & Perder Gordura',
-      text: 'Meu nome é Matheus e eu quero ganhar massa muscular e perder gordura. Faça uma triagem completa e calcule minhas metas ideais.'
-    },
-    {
-      title: '⚖️ Bioimpedância: 82kg, 20% gordura e 1.78m',
-      text: 'Minha bioimpedância deu 82kg, 20% de gordura corporal e 1.78m de altura. Quero perder gordura, calcule as calorias e macros ideais.'
-    },
-    {
-      title: '🏋️ Treino ABC hipertrofia completo',
-      text: 'Crie uma ficha de treino ABC completa para hipertrofia: Treino A (Peito e Tríceps), Treino B (Costas e Bíceps), Treino C (Pernas completo).'
-    },
-    {
-      title: '🔥 Calorias & Proteína (2.600 kcal · 180g P)',
-      text: 'Ajuste minha meta diária para 2.600 kcal com 180g de proteína e 250g de carboidratos.'
+    if (file.size > 15 * 1024 * 1024) {
+      setError('A imagem deve ter no máximo 15MB.');
+      return;
     }
-  ];
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result as string;
+      const base64Data = result.split(',')[1];
+      setAttachedImage({
+        data: base64Data,
+        mimeType: file.type || 'image/jpeg',
+        name: file.name || 'documento_anexo.png',
+        previewUrl: result,
+        sizeBytes: file.size
+      });
+      setError('');
+    };
+    reader.onerror = () => {
+      setError('Não foi possível ler o arquivo de imagem.');
+    };
+    reader.readAsDataURL(file);
+  }
+
+  function handleFileInputChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (file) {
+      processImageFile(file);
+    }
+    e.target.value = '';
+  }
+
+  function handlePaste(e: React.ClipboardEvent) {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (item.type.startsWith('image/')) {
+        const file = item.getAsFile();
+        if (file) {
+          processImageFile(file);
+          e.preventDefault();
+          break;
+        }
+      }
+    }
+  }
+
+  function handleDragOver(e: React.DragEvent) {
+    e.preventDefault();
+    setIsDragging(true);
+  }
+
+  function handleDragLeave(e: React.DragEvent) {
+    e.preventDefault();
+    setIsDragging(false);
+  }
+
+  function handleDrop(e: React.DragEvent) {
+    e.preventDefault();
+    setIsDragging(false);
+    const files = e.dataTransfer?.files;
+    if (files && files.length > 0) {
+      processImageFile(files[0]);
+    }
+  }
 
   async function handleAnalyze() {
-    if (!prompt.trim()) {
-      setError('Digite ou selecione uma instrução antes de continuar.');
+    const trimmed = prompt.trim();
+    if (!trimmed && !attachedImage) {
+      setError('Digite uma instrução ou anexe um print/foto (exame de bioimpedância, ficha de treino ou cardápio).');
       return;
     }
     setError('');
     setLoading(true);
     try {
-      const res = await planSmartCommand(prompt, currentState);
+      const res = await planSmartCommand(trimmed, currentState, attachedImage);
       if (res.cards.length === 0) {
-        setError('Nenhuma alteração foi identificada para este comando. Tente especificar nomes de treinos ou metas.');
+        setError('Nenhuma alteração foi identificada. Verifique se a instrução está clara ou se a imagem possui texto/tabelas legíveis.');
         return;
       }
       setPlanResult(res);
       setCards(res.cards);
     } catch (err) {
       console.error(err);
-      setError(err instanceof Error ? err.message : 'Falha ao processar o comando com IA.');
+      setError(err instanceof Error ? err.message : 'Falha ao processar com IA.');
     } finally {
       setLoading(false);
     }
@@ -122,10 +157,11 @@ export function SmartCommandModal({
 
   function handleApprove() {
     try {
+      const effectivePrompt = prompt.trim() || (attachedImage ? `Leitura de documento anexado (${attachedImage.name})` : 'Comando inteligente');
       const { nextState, logEntry } = applySmartCards(
         currentState,
         cards,
-        prompt,
+        effectivePrompt,
         planResult?.jevDecision
       );
       onApply(nextState, logEntry);
@@ -155,13 +191,13 @@ export function SmartCommandModal({
       title={planResult ? 'Revisão do Planejamento' : 'Comando Inteligente'}
       subtitle={
         planResult
-          ? 'Revise os campos identificados e aprove as alterações para seu treino ou dieta.'
-          : 'Descreva em texto livre treinos, dietas ou metas. JEV & Gemini planejam as alterações.'
+          ? 'Revise os campos identificados e aprove as alterações para seu treino, dieta ou perfil.'
+          : 'Descreva treinos, dietas e metas em texto livre ou anexe prints de bioimpedância e fichas de academia.'
       }
       onClose={onClose}
       wide
     >
-      <div className="modal-body">
+      <div className="modal-body" onPaste={handlePaste}>
         {!planResult ? (
           /* Step 1: Input view */
           <div className="smart-input-section">
@@ -170,14 +206,14 @@ export function SmartCommandModal({
                 <label htmlFor="smart-prompt-input" className="smart-field-label">
                   O que você gostaria de criar ou atualizar?
                 </label>
-                <span className="smart-field-badge">Linguagem Natural</span>
+                <span className="smart-field-badge">Multimodal · Visão & Texto</span>
               </div>
 
               <div className="smart-textarea-wrapper">
                 <textarea
                   id="smart-prompt-input"
                   className="smart-cmd-textarea"
-                  placeholder="Exemplo: 'treino de perna', 'Adicione um treino de costas na quarta', 'ajuste as calorias para 2.600 kcal'..."
+                  placeholder="Exemplo: 'Meu laudo de bioimpedância está no print anexado, calcule minhas metas ideais para queima de gordura', 'Crie um treino ABC para hipertrofia', 'Ajuste minhas calorias para 2.400 kcal'..."
                   value={prompt}
                   onChange={e => { setPrompt(e.target.value); setError(''); }}
                   onKeyDown={e => {
@@ -192,55 +228,86 @@ export function SmartCommandModal({
               </div>
             </div>
 
-            {/* Realtime JEV Suggestions */}
-            {realtimeJev && realtimeJev.pills.length > 0 && (
-              <div className="jev-realtime-card">
-                <div className="jev-realtime-card-header">
-                  <div className="jev-realtime-title">
-                    <Zap size={14} className="jev-zap-icon" />
-                    <strong>Sugestões Instantâneas JEV ({realtimeJev.latencyMs}ms)</strong>
-                  </div>
-                  <span className="jev-confidence-pill">
-                    {Math.round(realtimeJev.confidence * 100)}% de precisão
-                  </span>
-                </div>
+            {/* Hidden native file input */}
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              style={{ display: 'none' }}
+              onChange={handleFileInputChange}
+            />
 
-                <div className="jev-realtime-pills">
-                  {realtimeJev.pills.map((pill, i) => (
-                    <button
-                      key={i}
-                      type="button"
-                      className="jev-realtime-pill"
-                      onClick={() => {
-                        setPrompt(prev => prev.trim() + (pill.appendText.startsWith(' ') ? '' : ' ') + pill.appendText);
-                        setError('');
-                      }}
-                    >
-                      <Plus size={12} />
-                      <span>{pill.label}</span>
-                    </button>
-                  ))}
+            {/* Image attachment: Preview Card OR Upload Dropzone */}
+            {attachedImage ? (
+              <div className="smart-attachment-card">
+                <div className="smart-attachment-left">
+                  <img
+                    src={attachedImage.previewUrl}
+                    alt="Documento anexado"
+                    className="smart-attachment-thumb"
+                  />
+                  <div className="smart-attachment-info">
+                    <div className="smart-attachment-name-row">
+                      <FileImage size={15} className="smart-attachment-icon" />
+                      <strong className="smart-attachment-name">{attachedImage.name}</strong>
+                      <span className="smart-attachment-badge">
+                        <Sparkles size={11} /> Visão IA Ativa
+                      </span>
+                    </div>
+                    <span className="smart-attachment-desc">
+                      {attachedImage.sizeBytes ? `${Math.round(attachedImage.sizeBytes / 1024)} KB · ` : ''}
+                      A IA fará a leitura de tabelas, números e exercícios deste documento.
+                    </span>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="smart-attachment-remove-btn"
+                  title="Remover anexo"
+                  onClick={() => setAttachedImage(null)}
+                  disabled={loading}
+                >
+                  <Trash2 size={15} />
+                  <span>Remover</span>
+                </button>
+              </div>
+            ) : (
+              <div
+                className={`smart-dropzone ${isDragging ? 'is-dragging' : ''}`}
+                onDragOver={handleDragOver}
+                onDragLeave={handleDragLeave}
+                onDrop={handleDrop}
+                onClick={() => fileInputRef.current?.click()}
+                role="button"
+                tabIndex={0}
+                aria-label="Anexar imagem de exame, bioimpedância ou ficha de treino"
+              >
+                <div className="smart-dropzone-content">
+                  <div className="smart-dropzone-icon-wrap">
+                    <Camera size={20} />
+                  </div>
+                  <div className="smart-dropzone-texts">
+                    <span className="smart-dropzone-main">
+                      <strong>Anexar print ou foto</strong> (Bioimpedância InBody, laudo, treino ou cardápio)
+                    </span>
+                    <span className="smart-dropzone-sub">
+                      Clique para escolher, arraste o arquivo ou cole diretamente com <strong>⌘V / Ctrl+V</strong>
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    className="smart-dropzone-btn"
+                    onClick={e => {
+                      e.stopPropagation();
+                      fileInputRef.current?.click();
+                    }}
+                  >
+                    <Upload size={14} />
+                    <span>Selecionar</span>
+                  </button>
                 </div>
               </div>
             )}
-
-            {/* Quick Inspiration Templates */}
-            <div className="smart-templates-container">
-              <span className="smart-templates-title">SUGESTÕES RÁPIDAS PARA COMEÇAR</span>
-              <div className="smart-templates-grid">
-                {examplePrompts.map(ex => (
-                  <button
-                    key={ex.title}
-                    type="button"
-                    className="smart-template-chip"
-                    onClick={() => { setPrompt(ex.text); setError(''); }}
-                    disabled={loading}
-                  >
-                    <span className="smart-template-name">{ex.title}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
 
             {error && (
               <div className="error" role="alert" style={{ marginTop: '14px', marginBottom: 0 }}>
@@ -254,12 +321,12 @@ export function SmartCommandModal({
         ) : (
           /* Step 2: Approval View */
           <div className="smart-approval-section">
-            {/* JEV Decision Hero Banner */}
+            {/* Decision Hero Banner */}
             <div className="jev-decision-hero">
               <div className="jev-decision-hero-top">
                 <div className="jev-brand-badge">
                   <span className="jev-dot-pulsing" />
-                  <span>Decisão Calibrada · TypeSafe JEV</span>
+                  <span>Planejamento Concluído · Ritmo AI</span>
                 </div>
 
                 {planResult.jevDecision?.confidence && (
@@ -271,12 +338,11 @@ export function SmartCommandModal({
 
               <h3 className="jev-summary-headline">{planResult.summary}</h3>
 
-              <div className="jev-intent-meta">
-                <span>Escopo identificado: <strong>{planResult.jevDecision?.intent || 'Operação inteligente'}</strong></span>
-                {planResult.jevDecision?.choiceDetails && (
-                  <span className="jev-choice-detail">({planResult.jevDecision.choiceDetails})</span>
-                )}
-              </div>
+              {planResult.jevDecision?.intent && (
+                <div className="jev-intent-meta">
+                  <span>Escopo identificado: <strong>{planResult.jevDecision.intent}</strong></span>
+                </div>
+              )}
             </div>
 
             {/* Header with counter and Select All */}
@@ -349,7 +415,7 @@ export function SmartCommandModal({
                         )}
                         {card.after && (
                           <span className="smart-diff-tag after">
-                            <small>Depois:</small> {card.after}
+                            <small>Proposto:</small> {card.after}
                           </span>
                         )}
                       </div>
@@ -357,14 +423,9 @@ export function SmartCommandModal({
 
                     {card.details && card.details.length > 0 && (
                       <ul className="smart-card-details-list">
-                        {card.details.slice(0, 6).map((d, i) => (
-                          <li key={i}>{d}</li>
+                        {card.details.map((detail, idx) => (
+                          <li key={idx}>{detail}</li>
                         ))}
-                        {card.details.length > 6 && (
-                          <li className="smart-card-details-more">
-                            +{card.details.length - 6} outros itens...
-                          </li>
-                        )}
                       </ul>
                     )}
                   </div>
@@ -375,7 +436,7 @@ export function SmartCommandModal({
         )}
       </div>
 
-      <footer className="modal-footer">
+      <footer className="modal-footer smart-modal-footer">
         {!planResult ? (
           <>
             <button
@@ -390,13 +451,13 @@ export function SmartCommandModal({
             <button
               type="button"
               className="button primary"
-              disabled={loading || !prompt.trim()}
+              disabled={loading || (!prompt.trim() && !attachedImage)}
               onClick={handleAnalyze}
             >
               {loading ? (
                 <>
                   <Loader2 size={16} className="spin" />
-                  <span>Planejando com IA & JEV...</span>
+                  <span>{attachedImage ? 'Analisando imagem e dados...' : 'Planejando com IA...'}</span>
                 </>
               ) : (
                 <>
