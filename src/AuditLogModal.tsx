@@ -4,13 +4,11 @@ import {
   RotateCcw,
   CheckCircle,
   Clock,
-  Sparkles,
   Trash2,
-  AlertTriangle,
   ArrowRight,
-  ShieldCheck,
   ChevronDown,
-  ChevronUp
+  ChevronUp,
+  ShieldCheck
 } from 'lucide-react';
 import { type AppState } from './domain';
 import {
@@ -85,102 +83,91 @@ export function AuditLogModal({
 
   return (
     <Modal
-      title="Histórico de Alterações & Reversão"
-      subtitle="Auditoria completa de todas as operações e comandos com IA"
+      title="Histórico & Reversão de IA"
+      subtitle="Auditoria de todas as operações realizadas via comandos inteligentes. Reversão segura em 1 clique."
       onClose={onClose}
+      wide
     >
-      <div className="audit-logs-container">
+      <div className="modal-body">
         {logs.length === 0 ? (
-          <div style={{ textAlign: 'center', padding: '2.5rem 1rem', color: '#94a3b8' }}>
-            <History size={40} style={{ margin: '0 auto 1rem', opacity: 0.4 }} />
-            <h4 style={{ margin: '0 0 0.5rem', color: '#e2e8f0' }}>Nenhuma alteração registrada ainda</h4>
-            <p style={{ margin: 0, fontSize: '0.85rem' }}>
-              Quando você utilizar comandos inteligentes com IA para adicionar ou modificar treinos e dietas, os registros aparecerão aqui com opção de desfazer a qualquer momento.
+          <div className="audit-empty-state">
+            <div className="audit-empty-icon">
+              <History size={34} />
+            </div>
+            <h4>Nenhuma alteração registrada</h4>
+            <p>
+              Quando você utilizar comandos inteligentes com IA para adicionar ou modificar treinos e dietas,
+              cada alteração será salva aqui com um snapshot para desfazer a qualquer momento.
             </p>
           </div>
         ) : (
-          <>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ fontSize: '0.82rem', color: '#94a3b8' }}>
-                {logs.length} registro(s) no histórico local
+          <div className="audit-logs-section">
+            <div className="audit-logs-header-bar">
+              <span className="audit-logs-count-badge">
+                {logs.length} operação(ões) registrada(s)
               </span>
+
               <button
                 type="button"
                 className="text-button danger"
                 onClick={handleClear}
-                style={{ fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}
               >
                 <Trash2 size={13} />
-                Limpar histórico
+                <span>Limpar histórico</span>
               </button>
             </div>
 
-            <div className="audit-logs-list">
+            <div className="audit-logs-scroll-list">
               {logs.map(entry => {
                 const isExpanded = expandedId === entry.id;
                 return (
                   <div
                     key={entry.id}
-                    className={`audit-entry-card ${entry.status === 'reverted' ? 'reverted' : ''}`}
+                    className={`audit-entry-card ${entry.status === 'reverted' ? 'is-reverted' : ''}`}
                   >
                     <div className="audit-entry-top">
                       <div className="audit-entry-meta">
-                        <Clock size={14} />
+                        <Clock size={13} />
                         <span>{formatTime(entry.timestamp)}</span>
                         {entry.jevDecision && (
-                          <span style={{
-                            fontSize: '0.72rem',
-                            padding: '0.15rem 0.45rem',
-                            background: 'rgba(99, 102, 241, 0.2)',
-                            color: '#a5b4fc',
-                            borderRadius: '4px',
-                            fontWeight: 600
-                          }}>
+                          <span className="audit-jev-badge">
                             JEV ({Math.round(entry.jevDecision.confidence * 100)}%)
                           </span>
                         )}
                       </div>
 
                       <span className={`audit-status-tag ${entry.status}`}>
-                        {entry.status === 'applied' ? 'Ativo' : 'Revertido'}
+                        {entry.status === 'applied' ? 'Ativo no app' : 'Revertido'}
                       </span>
                     </div>
 
-                    <div className="audit-prompt-box">
+                    <div className="audit-prompt-quote">
                       "{entry.prompt}"
                     </div>
 
                     <div className="audit-changes-pills">
                       {entry.changes.map((c, i) => (
                         <span key={i} className="audit-change-chip">
-                          <CheckCircle size={12} color="#10b981" />
+                          <CheckCircle size={12} className="audit-check-icon" />
                           <strong>{c.label}</strong>
-                          {c.after && <small style={{ color: '#94a3b8' }}>({c.after})</small>}
+                          {c.after && <small className="audit-after-text">({c.after})</small>}
                         </span>
                       ))}
                     </div>
 
                     {isExpanded && (
-                      <div style={{
-                        marginTop: '0.5rem',
-                        padding: '0.75rem',
-                        background: 'rgba(0,0,0,0.25)',
-                        borderRadius: '8px',
-                        fontSize: '0.8rem',
-                        color: '#cbd5e1'
-                      }}>
-                        <div style={{ fontWeight: 600, marginBottom: '0.4rem', color: '#f8fafc' }}>
-                          Detalhes das alterações:
-                        </div>
+                      <div className="audit-expanded-details">
+                        <strong className="audit-details-title">Detalhes das alterações:</strong>
                         {entry.changes.map((c, i) => (
-                          <div key={i} style={{ marginBottom: '0.35rem' }}>
+                          <div key={i} className="audit-detail-row">
                             • <strong>{c.label}:</strong> {c.description}
-                            {c.before && <span> (Antes: {c.before})</span>}
-                            {c.after && <span> ➔ (Depois: {c.after})</span>}
+                            {c.before && <span className="diff-before"> (Antes: {c.before})</span>}
+                            {c.after && <span className="diff-after"> ➔ (Depois: {c.after})</span>}
                           </div>
                         ))}
                         {entry.revertedAt && (
-                          <div style={{ marginTop: '0.5rem', color: '#f59e0b', fontSize: '0.75rem' }}>
+                          <div className="audit-reverted-note">
                             Revertido em: {formatTime(entry.revertedAt)}
                           </div>
                         )}
@@ -191,7 +178,6 @@ export function AuditLogModal({
                       <button
                         type="button"
                         className="text-button"
-                        style={{ fontSize: '0.78rem', color: '#94a3b8' }}
                         onClick={() => setExpandedId(isExpanded ? null : entry.id)}
                       >
                         {isExpanded ? (
@@ -205,21 +191,21 @@ export function AuditLogModal({
                         <button
                           type="button"
                           className="button secondary"
-                          style={{ padding: '0.35rem 0.75rem', fontSize: '0.8rem' }}
+                          style={{ padding: '7px 12px', fontSize: '11px' }}
                           onClick={() => handleRevert(entry)}
                         >
-                          <RotateCcw size={14} />
-                          Reverter Alterações
+                          <RotateCcw size={13} />
+                          <span>Reverter Alteração</span>
                         </button>
                       ) : (
                         <button
                           type="button"
                           className="button secondary"
-                          style={{ padding: '0.35rem 0.75rem', fontSize: '0.8rem' }}
+                          style={{ padding: '7px 12px', fontSize: '11px' }}
                           onClick={() => handleReapply(entry)}
                         >
-                          <ArrowRight size={14} />
-                          Reaplicar
+                          <ArrowRight size={13} />
+                          <span>Reaplicar</span>
                         </button>
                       )}
                     </div>
@@ -227,9 +213,20 @@ export function AuditLogModal({
                 );
               })}
             </div>
-          </>
+          </div>
         )}
       </div>
+
+      <footer className="modal-footer">
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#7a8e71', fontSize: '11px' }}>
+          <ShieldCheck size={15} color="#285b49" />
+          <span>Auditoria local · Todas as alterações de estado possuem snapshot seguro</span>
+        </div>
+
+        <button type="button" className="button secondary" onClick={onClose}>
+          Fechar
+        </button>
+      </footer>
     </Modal>
   );
 }

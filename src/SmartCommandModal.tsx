@@ -2,7 +2,6 @@ import { useState, useEffect } from 'react';
 import {
   Sparkles,
   Check,
-  X,
   Target,
   Flame,
   Dumbbell,
@@ -12,10 +11,9 @@ import {
   History,
   AlertCircle,
   Loader2,
-  ChevronRight,
   ShieldCheck,
   Zap,
-  HelpCircle
+  Plus
 } from 'lucide-react';
 import { type AppState } from './domain';
 import {
@@ -50,7 +48,6 @@ export function SmartCommandModal({
   const [planResult, setPlanResult] = useState<SmartPlanResult | null>(null);
   const [cards, setCards] = useState<SmartCardChange[]>([]);
   const [realtimeJev, setRealtimeJev] = useState<RealtimeJevResult | null>(null);
-  const [jevBusy, setJevBusy] = useState(false);
 
   useEffect(() => {
     const trimmed = prompt.trim();
@@ -60,7 +57,6 @@ export function SmartCommandModal({
     }
 
     const timer = setTimeout(async () => {
-      setJevBusy(true);
       try {
         const res = await fetchRealtimeJevSuggestions(trimmed, currentState);
         if (res && res.pills.length > 0) {
@@ -68,8 +64,6 @@ export function SmartCommandModal({
         }
       } catch (err) {
         console.warn('Realtime Jev suggestion error:', err);
-      } finally {
-        setJevBusy(false);
       }
     }, 200);
 
@@ -77,10 +71,22 @@ export function SmartCommandModal({
   }, [prompt]);
 
   const examplePrompts = [
-    { label: '🏋️ Treino ABC completo', text: 'Crie uma ficha de treino ABC completa para hipertrofia: Treino A (Peito e Tríceps), Treino B (Costas e Bíceps), Treino C (Pernas completo).' },
-    { label: '🦵 Treino de Perna', text: 'Treino de perna completo para hipertrofia com agachamento livre, leg press e flexora' },
-    { label: '🔥 Ajustar calorias e proteína', text: 'Ajuste minha meta diária para 2.600 kcal com 180g de proteína e 250g de carboidratos.' },
-    { label: '🎯 Mudar objetivo e peso alvo', text: 'Mude meu objetivo para Ganhar massa e peso de referência para 82 kg.' }
+    {
+      title: '👤 Matheus: Ganhar Massa & Perder Gordura',
+      text: 'Meu nome é Matheus e eu quero ganhar massa muscular e perder gordura. Faça uma triagem completa e calcule minhas metas ideais.'
+    },
+    {
+      title: '⚖️ Bioimpedância: 82kg, 20% gordura e 1.78m',
+      text: 'Minha bioimpedância deu 82kg, 20% de gordura corporal e 1.78m de altura. Quero perder gordura, calcule as calorias e macros ideais.'
+    },
+    {
+      title: '🏋️ Treino ABC hipertrofia completo',
+      text: 'Crie uma ficha de treino ABC completa para hipertrofia: Treino A (Peito e Tríceps), Treino B (Costas e Bíceps), Treino C (Pernas completo).'
+    },
+    {
+      title: '🔥 Calorias & Proteína (2.600 kcal · 180g P)',
+      text: 'Ajuste minha meta diária para 2.600 kcal com 180g de proteína e 250g de carboidratos.'
+    }
   ];
 
   async function handleAnalyze() {
@@ -131,14 +137,14 @@ export function SmartCommandModal({
 
   function renderCardIcon(icon: SmartIcon) {
     switch (icon) {
-      case 'target': return <Target size={22} />;
-      case 'flame': return <Flame size={22} />;
-      case 'protein': return <Utensils size={22} />;
-      case 'dumbbell': return <Dumbbell size={22} />;
-      case 'refresh': return <RefreshCw size={22} />;
-      case 'utensils': return <Utensils size={22} />;
-      case 'scale': return <Scale size={22} />;
-      default: return <Sparkles size={22} />;
+      case 'target': return <Target size={20} />;
+      case 'flame': return <Flame size={20} />;
+      case 'protein': return <Utensils size={20} />;
+      case 'dumbbell': return <Dumbbell size={20} />;
+      case 'refresh': return <RefreshCw size={20} />;
+      case 'utensils': return <Utensils size={20} />;
+      case 'scale': return <Scale size={20} />;
+      default: return <Sparkles size={20} />;
     }
   }
 
@@ -146,138 +152,145 @@ export function SmartCommandModal({
 
   return (
     <Modal
-      title="Comando Inteligente com IA"
-      subtitle="Decisão calibrada via TypeSafe JEV e execução de alta fidelidade"
+      title={planResult ? 'Revisão do Planejamento' : 'Comando Inteligente'}
+      subtitle={
+        planResult
+          ? 'Revise os campos identificados e aprove as alterações para seu treino ou dieta.'
+          : 'Descreva em texto livre treinos, dietas ou metas. JEV & Gemini planejam as alterações.'
+      }
       onClose={onClose}
+      wide
     >
-      <div className="smart-cmd-container">
-        {/* Step 1: Input view */}
+      <div className="modal-body">
         {!planResult ? (
-          <>
-            <div className="smart-cmd-prompt-box">
-              <label htmlFor="smart-prompt-input" style={{ fontSize: '0.85rem', color: '#cbd5e1', fontWeight: 600 }}>
-                O que você gostaria de criar ou atualizar?
-              </label>
-              <textarea
-                id="smart-prompt-input"
-                className="smart-cmd-textarea"
-                placeholder="Exemplo: 'treino de perna', 'Adicione um treino de costas na quarta', 'ajuste as calorias para 2.600 kcal'..."
-                value={prompt}
-                onChange={e => { setPrompt(e.target.value); setError(''); }}
-                rows={3}
-                disabled={loading}
-              />
+          /* Step 1: Input view */
+          <div className="smart-input-section">
+            <div className="smart-field-group">
+              <div className="smart-field-label-row">
+                <label htmlFor="smart-prompt-input" className="smart-field-label">
+                  O que você gostaria de criar ou atualizar?
+                </label>
+                <span className="smart-field-badge">Linguagem Natural</span>
+              </div>
 
-              {realtimeJev && realtimeJev.pills.length > 0 && (
-                <div className="jev-realtime-panel">
-                  <div className="jev-realtime-badge">
-                    <Zap size={13} style={{ color: '#fbbf24' }} />
-                    <span>
-                      JEV Instantâneo ({realtimeJev.latencyMs}ms) · {Math.round(realtimeJev.confidence * 100)}% certeza
-                    </span>
+              <div className="smart-textarea-wrapper">
+                <textarea
+                  id="smart-prompt-input"
+                  className="smart-cmd-textarea"
+                  placeholder="Exemplo: 'treino de perna', 'Adicione um treino de costas na quarta', 'ajuste as calorias para 2.600 kcal'..."
+                  value={prompt}
+                  onChange={e => { setPrompt(e.target.value); setError(''); }}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                      e.preventDefault();
+                      void handleAnalyze();
+                    }
+                  }}
+                  rows={4}
+                  disabled={loading}
+                />
+              </div>
+            </div>
+
+            {/* Realtime JEV Suggestions */}
+            {realtimeJev && realtimeJev.pills.length > 0 && (
+              <div className="jev-realtime-card">
+                <div className="jev-realtime-card-header">
+                  <div className="jev-realtime-title">
+                    <Zap size={14} className="jev-zap-icon" />
+                    <strong>Sugestões Instantâneas JEV ({realtimeJev.latencyMs}ms)</strong>
                   </div>
-                  <div className="jev-realtime-pills">
-                    {realtimeJev.pills.map((pill, i) => (
-                      <button
-                        key={i}
-                        type="button"
-                        className="jev-realtime-pill"
-                        onClick={() => {
-                          setPrompt(prev => prev.trim() + (pill.appendText.startsWith(' ') ? '' : ' ') + pill.appendText);
-                          setError('');
-                        }}
-                      >
-                        {pill.label}
-                      </button>
-                    ))}
-                  </div>
+                  <span className="jev-confidence-pill">
+                    {Math.round(realtimeJev.confidence * 100)}% de precisão
+                  </span>
                 </div>
-              )}
 
-              <div className="smart-cmd-examples">
-                <span>Modelos prontos:</span>
+                <div className="jev-realtime-pills">
+                  {realtimeJev.pills.map((pill, i) => (
+                    <button
+                      key={i}
+                      type="button"
+                      className="jev-realtime-pill"
+                      onClick={() => {
+                        setPrompt(prev => prev.trim() + (pill.appendText.startsWith(' ') ? '' : ' ') + pill.appendText);
+                        setError('');
+                      }}
+                    >
+                      <Plus size={12} />
+                      <span>{pill.label}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Quick Inspiration Templates */}
+            <div className="smart-templates-container">
+              <span className="smart-templates-title">SUGESTÕES RÁPIDAS PARA COMEÇAR</span>
+              <div className="smart-templates-grid">
                 {examplePrompts.map(ex => (
                   <button
-                    key={ex.label}
+                    key={ex.title}
                     type="button"
-                    className="smart-cmd-pill"
+                    className="smart-template-chip"
                     onClick={() => { setPrompt(ex.text); setError(''); }}
                     disabled={loading}
                   >
-                    {ex.label}
+                    <span className="smart-template-name">{ex.title}</span>
                   </button>
                 ))}
               </div>
             </div>
 
             {error && (
-              <div className="global-error" role="alert" style={{ margin: 0 }}>
-                <AlertCircle size={16} />
-                <span>{error}</span>
-              </div>
-            )}
-
-            <div className="smart-cmd-footer">
-              <button
-                type="button"
-                className="button secondary"
-                onClick={onOpenAuditLogs}
-              >
-                <History size={16} />
-                Histórico & Reversão
-              </button>
-
-              <button
-                type="button"
-                className="button primary"
-                disabled={loading || !prompt.trim()}
-                onClick={handleAnalyze}
-              >
-                {loading ? (
-                  <>
-                    <Loader2 size={17} className="spin" />
-                    Analisando com JEV & Gemini...
-                  </>
-                ) : (
-                  <>
-                    <Sparkles size={17} />
-                    Analisar e Planejar Alterações
-                  </>
-                )}
-              </button>
-            </div>
-          </>
-        ) : (
-          /* Step 2: Smart Cards Approval view */
-          <>
-            {/* JEV Decision banner */}
-            <div className="jev-decision-banner">
-              <div className="jev-decision-left">
-                <span className="jev-glow-dot" />
-                <div className="jev-decision-text">
-                  <strong>Decisão Calibrada · TypeSafe JEV</strong>
-                  <small>
-                    Área identificada: {planResult.jevDecision?.intent || 'Operação inteligente'}
-                    {planResult.jevDecision?.choiceDetails ? ` (${planResult.jevDecision.choiceDetails})` : ''}
-                  </small>
+              <div className="error" role="alert" style={{ marginTop: '14px', marginBottom: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <AlertCircle size={16} />
+                  <span>{error}</span>
                 </div>
               </div>
-              {planResult.jevDecision?.confidence && (
-                <span className="jev-confidence-tag">
-                  {Math.round(planResult.jevDecision.confidence * 100)}% Confiança JEV
-                </span>
-              )}
+            )}
+          </div>
+        ) : (
+          /* Step 2: Approval View */
+          <div className="smart-approval-section">
+            {/* JEV Decision Hero Banner */}
+            <div className="jev-decision-hero">
+              <div className="jev-decision-hero-top">
+                <div className="jev-brand-badge">
+                  <span className="jev-dot-pulsing" />
+                  <span>Decisão Calibrada · TypeSafe JEV</span>
+                </div>
+
+                {planResult.jevDecision?.confidence && (
+                  <span className="jev-confidence-hero-tag">
+                    {Math.round(planResult.jevDecision.confidence * 100)}% Confiança
+                  </span>
+                )}
+              </div>
+
+              <h3 className="jev-summary-headline">{planResult.summary}</h3>
+
+              <div className="jev-intent-meta">
+                <span>Escopo identificado: <strong>{planResult.jevDecision?.intent || 'Operação inteligente'}</strong></span>
+                {planResult.jevDecision?.choiceDetails && (
+                  <span className="jev-choice-detail">({planResult.jevDecision.choiceDetails})</span>
+                )}
+              </div>
             </div>
 
-            <p style={{ margin: 0, fontSize: '0.88rem', color: '#cbd5e1' }}>
-              {planResult.summary}
-            </p>
+            {/* Header with counter and Select All */}
+            <div className="smart-cards-header-bar">
+              <div className="smart-cards-counter">
+                <strong>Campos Propostos</strong>
+                <span className="smart-count-pill">
+                  {selectedCount} de {cards.length} selecionados
+                </span>
+              </div>
 
-            <div className="smart-cards-header">
-              <h3>Campos a serem alterados ({selectedCount} de {cards.length})</h3>
               <button
                 type="button"
-                className="smart-cards-select-all"
+                className="text-button"
                 onClick={() => handleSelectAll(selectedCount < cards.length)}
               >
                 {selectedCount < cards.length ? 'Selecionar todos' : 'Desmarcar todos'}
@@ -285,62 +298,71 @@ export function SmartCommandModal({
             </div>
 
             {error && (
-              <div className="global-error" role="alert" style={{ margin: 0 }}>
-                <AlertCircle size={16} />
-                <span>{error}</span>
+              <div className="error" role="alert" style={{ margin: '10px 0' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <AlertCircle size={16} />
+                  <span>{error}</span>
+                </div>
               </div>
             )}
 
-            {/* Smart Cards list */}
-            <div className="smart-cards-list">
+            {/* Smart Cards List */}
+            <div className="smart-cards-scroll-list">
               {cards.map(card => (
                 <div
                   key={card.id}
-                  className={`smart-card ${card.selected ? 'selected' : ''}`}
+                  className={`smart-card-item ${card.selected ? 'is-selected' : ''}`}
                   onClick={() => toggleCard(card.id)}
                 >
-                  <input
-                    type="checkbox"
-                    className="smart-card-checkbox"
-                    checked={card.selected}
-                    onChange={() => toggleCard(card.id)}
-                    onClick={e => e.stopPropagation()}
-                  />
+                  <div className="smart-card-check-wrap">
+                    <input
+                      type="checkbox"
+                      className="smart-card-checkbox-input"
+                      checked={card.selected}
+                      onChange={() => toggleCard(card.id)}
+                      onClick={e => e.stopPropagation()}
+                      aria-label={`Selecionar ${card.title}`}
+                    />
+                  </div>
 
-                  <div className={`smart-card-icon-wrap ${card.icon}`}>
+                  <div className={`smart-card-avatar ${card.icon}`}>
                     {renderCardIcon(card.icon)}
                   </div>
 
-                  <div className="smart-card-body">
-                    <div className="smart-card-top">
-                      <h4>{card.title}</h4>
-                      <span className="smart-card-badge-pill">{card.badge}</span>
+                  <div className="smart-card-content">
+                    <div className="smart-card-content-top">
+                      <h4 className="smart-card-title">{card.title}</h4>
+                      <span className="smart-card-type-badge">{card.badge}</span>
                     </div>
 
-                    <p className="smart-card-sub">{card.subtitle}</p>
+                    <p className="smart-card-subtitle">{card.subtitle}</p>
 
                     {(card.before || card.after) && (
-                      <div className="smart-card-diff">
+                      <div className="smart-diff-row">
                         {card.before && (
-                          <span className="smart-diff-before">{card.before}</span>
+                          <span className="smart-diff-tag before">
+                            <small>Antes:</small> {card.before}
+                          </span>
                         )}
                         {card.before && card.after && (
-                          <span className="smart-diff-arrow">➔</span>
+                          <span className="smart-diff-arrow">→</span>
                         )}
                         {card.after && (
-                          <span className="smart-diff-after">{card.after}</span>
+                          <span className="smart-diff-tag after">
+                            <small>Depois:</small> {card.after}
+                          </span>
                         )}
                       </div>
                     )}
 
                     {card.details && card.details.length > 0 && (
                       <ul className="smart-card-details-list">
-                        {card.details.slice(0, 5).map((d, i) => (
+                        {card.details.slice(0, 6).map((d, i) => (
                           <li key={i}>{d}</li>
                         ))}
-                        {card.details.length > 5 && (
-                          <li style={{ color: '#94a3b8' }}>
-                            +{card.details.length - 5} outros itens...
+                        {card.details.length > 6 && (
+                          <li className="smart-card-details-more">
+                            +{card.details.length - 6} outros itens...
                           </li>
                         )}
                       </ul>
@@ -349,37 +371,70 @@ export function SmartCommandModal({
                 </div>
               ))}
             </div>
+          </div>
+        )}
+      </div>
 
-            {/* Footer with rollback promise & action */}
-            <div className="smart-cmd-footer">
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: '#94a3b8', fontSize: '0.78rem' }}>
-                <ShieldCheck size={14} color="#10b981" />
-                <span>Salvo em log de auditoria com reversão garantida</span>
-              </div>
+      <footer className="modal-footer">
+        {!planResult ? (
+          <>
+            <button
+              type="button"
+              className="button secondary"
+              onClick={onOpenAuditLogs}
+            >
+              <History size={16} />
+              <span>Histórico & Reversão</span>
+            </button>
 
-              <div style={{ display: 'flex', gap: '0.65rem' }}>
-                <button
-                  type="button"
-                  className="button secondary"
-                  onClick={() => setPlanResult(null)}
-                >
-                  Editar Comando
-                </button>
+            <button
+              type="button"
+              className="button primary"
+              disabled={loading || !prompt.trim()}
+              onClick={handleAnalyze}
+            >
+              {loading ? (
+                <>
+                  <Loader2 size={16} className="spin" />
+                  <span>Planejando com IA & JEV...</span>
+                </>
+              ) : (
+                <>
+                  <Sparkles size={16} />
+                  <span>Analisar e Planejar</span>
+                </>
+              )}
+            </button>
+          </>
+        ) : (
+          <>
+            <div className="smart-footer-guarantee">
+              <ShieldCheck size={16} className="smart-shield-icon" />
+              <span>Salvo com reversão garantida no histórico</span>
+            </div>
 
-                <button
-                  type="button"
-                  className="button primary"
-                  disabled={selectedCount === 0}
-                  onClick={handleApprove}
-                >
-                  <Check size={16} />
-                  Aprovar e Aplicar {selectedCount > 0 ? `(${selectedCount})` : ''}
-                </button>
-              </div>
+            <div className="smart-footer-button-group">
+              <button
+                type="button"
+                className="button secondary"
+                onClick={() => setPlanResult(null)}
+              >
+                Editar Comando
+              </button>
+
+              <button
+                type="button"
+                className="button primary"
+                disabled={selectedCount === 0}
+                onClick={handleApprove}
+              >
+                <Check size={16} />
+                <span>Aprovar e Aplicar {selectedCount > 0 ? `(${selectedCount})` : ''}</span>
+              </button>
             </div>
           </>
         )}
-      </div>
+      </footer>
     </Modal>
   );
 }

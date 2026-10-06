@@ -10,7 +10,8 @@ import {
   foods,
   ingredient,
   type Origin,
-  type Profile
+  type Profile,
+  type BodyRecord
 } from './domain';
 import { getGeminiKey, getTypeSafeKey } from './ai';
 import {
@@ -63,6 +64,207 @@ export interface RealtimeJevResult {
 }
 
 /**
+ * Motor de Cálculo Metabólico & Nutricional Científico (Katch-McArdle / Mifflin-St Jeor)
+ * Estima TMB, Gasto Energético Total (TDEE), déficit/superávit por objetivo,
+ * aporte proteico ideal, carboidratos, gorduras e hidratação.
+ */
+export interface MetabolicCalculation {
+  weight: number;
+  fatPercent: number | null;
+  height: number | null;
+  muscleKg: number | null;
+  fatMass: number | null;
+  fatFreeMass: number;
+  tmb: number;
+  tdee: number;
+  targetKcal: number;
+  protein: number;
+  carbs: number;
+  fat: number;
+  water: number;
+  targetWeight: number;
+  bmi: number | null;
+  goal: Profile['goal'];
+  explanation: string[];
+}
+
+export function calculateMetabolicProfile(params: {
+  weight?: number;
+  fatPercent?: number | null;
+  muscleKg?: number | null;
+  height?: number | null;
+  goal?: Profile['goal'];
+  currentState: AppState;
+}): MetabolicCalculation {
+  const latestBody = params.currentState.body.at(-1);
+  const weight = params.weight ?? latestBody?.weight ?? params.currentState.profile.targetWeight ?? 75;
+  const fatPercent = params.fatPercent !== undefined ? params.fatPercent : (latestBody?.fat ?? null);
+  const muscleKg = params.muscleKg !== undefined ? params.muscleKg : (latestBody?.muscle ?? null);
+  const height = params.height ?? latestBody?.height ?? 175;
+  const goal = params.goal ?? params.currentState.profile.goal ?? 'Recomposição corporal';
+
+  // 1. Massa Livre de Gordura (Massa Magra / FFM)
+  let fatFreeMass: number;
+  let fatMass: number | null = null;
+  if (fatPercent !== null && fatPercent > 0 && fatPercent < 100) {
+    fatMass = Number(((weight * fatPercent) / 100).toFixed(1));
+    fatFreeMass = Number((weight - fatMass).toFixed(1));
+  } else if (muscleKg && muscleKg > 10 && muscleKg < weight) {
+    fatFreeMass = Math.min(weight * 0.9, Number((muscleKg * 1.25).toFixed(1)));
+    fatMass = Number((weight - fatFreeMass).toFixed(1));
+  } else {
+    fatMass = Number((weight * 0.20).toFixed(1));
+    fatFreeMass = Number((weight * 0.80).toFixed(1));
+  }
+
+  // 2. Taxa Metabólica Basal (TMB)
+  // Katch-McArdle se % gordura for fornecido: TMB = 370 + (21.6 * FFM)
+  let tmb: number;
+  if (fatPercent !== null) {
+    tmb = Math.round(370 + 21.6 * fatFreeMass);
+  } else {
+    // Mifflin-St Jeor com estimativa de idade ~28 anos
+    tmb = Math.round(10 * weight + 6.25 * height - 5 * 28 + 5);
+  }
+
+  // 3. Gasto Energético Total (GET / TDEE) com fator moderado (musculação 3-5x/sem = 1.45)
+  const tdee = Math.round(tmb * 1.45);
+
+  // 4. Meta Calórica conforme Objetivo
+  let targetKcal: number;
+  const explanation: string[] = [];
+
+  if (goal === 'Perder gordura') {
+    targetKcal = Math.max(1300, Math.round(tdee - 450));
+    explanation.push(`TMB: ${tmb} kcal/dia · Gasto Energético Total Estimado: ${tdee} kcal/dia.`);
+    explanation.push(`Déficit calórico de 450 kcal para queima de gordura preservando massa muscular.`);
+  } else if (goal === 'Ganhar massa') {
+    targetKcal = Math.min(5000, Math.round(tdee + 350));
+    explanation.push(`TMB: ${tmb} kcal/dia · Gasto Energético Total Estimado: ${tdee} kcal/dia.`);
+    explanation.push(`Superávit calórico de 350 kcal para fornecer substrato à hipertrofia.`);
+  } else if (goal === 'Recomposição corporal') {
+    targetKcal = Math.max(1400, Math.round(tdee - 180));
+    explanation.push(`TMB: ${tmb} kcal/dia · Gasto Energético Total Estimado: ${tdee} kcal/dia.`);
+    explanation.push(`Leve déficit de 180 kcal aliado a alta proteína para ganhar músculo e secar gordura simultaneamente.`);
+  } else {
+    targetKcal = Math.round(tdee);
+    explanation.push(`Meta em nível de manutenção energética (${tdee} kcal/dia).`);
+  }
+
+  // 5. Distribuição de Macronutrientes
+  // Proteína: 2.2 a 2.4 g/kg de massa magra (ou ~2.0 g/kg peso)
+  const protein = Math.round(Math.min(320, Math.max(120, fatFreeMass * 2.3)));
+  // Gorduras: ~0.8g por kg peso total
+  const fat = Math.round(Math.min(120, Math.max(45, weight * 0.8)));
+  // Carboidratos: saldo restante dividido por 4
+  const calsRemaining = targetKcal - (protein * 4 + fat * 9);
+  const carbs = Math.round(Math.max(80, calsRemaining / 4));
+
+  // Água: 40 ml por kg de peso
+  const water = Math.round(Math.min(6000, Math.max(2000, weight * 40)));
+
+  // Peso de referência alvo
+  let targetWeight = weight;
+  if (goal === 'Perder gordura') {
+    targetWeight = Math.round(fatFreeMass / 0.87); // Mira em ~13% de BF
+  } else if (goal === 'Ganhar massa') {
+    targetWeight = Math.round(weight + 4);
+  } else {
+    targetWeight = Math.round(weight);
+  }
+
+  const bmi = height ? Number((weight / Math.pow(height / 100, 2)).toFixed(1)) : null;
+
+  return {
+    weight,
+    fatPercent,
+    height,
+    muscleKg,
+    fatMass,
+    fatFreeMass,
+    tmb,
+    tdee,
+    targetKcal,
+    protein,
+    carbs,
+    fat,
+    water,
+    targetWeight,
+    bmi,
+    goal,
+    explanation
+  };
+}
+
+/**
+ * Extrai entidades em português (Nome, Objetivo, Bioimpedância, Peso, Gordura, Altura)
+ */
+function extractProfileAndBioFromPrompt(prompt: string) {
+  const p = prompt.toLowerCase();
+
+  // 1. Nome
+  let name: string | undefined = undefined;
+  const nameMatch = prompt.match(/(?:meu\s+nome\s+(?:é|e)|sou\s+(?:o|a)|me\s+chamo|nome\s*[:=])\s+([A-Za-zÀ-ÿ]+)/i);
+  if (nameMatch && nameMatch[1]) {
+    const raw = nameMatch[1].trim();
+    name = raw.charAt(0).toUpperCase() + raw.slice(1).toLowerCase();
+  }
+
+  // 2. Objetivo
+  let goal: Profile['goal'] | undefined = undefined;
+  if (
+    (p.includes('ganhar massa') || p.includes('massa muscular') || p.includes('hipertrofia') || p.includes('crescer')) &&
+    (p.includes('perder gordura') || p.includes('queimar gordura') || p.includes('secar') || p.includes('emagrecer'))
+  ) {
+    goal = 'Recomposição corporal';
+  } else if (p.includes('recomposi') || p.includes('recompor')) {
+    goal = 'Recomposição corporal';
+  } else if (p.includes('perder gordura') || p.includes('emagrecer') || p.includes('secar') || p.includes('cutting') || p.includes('queimar gordura')) {
+    goal = 'Perder gordura';
+  } else if (p.includes('ganhar massa') || p.includes('hipertrofia') || p.includes('crescer') || p.includes('bulking') || p.includes('massa muscular')) {
+    goal = 'Ganhar massa';
+  } else if (p.includes('manter peso') || p.includes('manuten')) {
+    goal = 'Manter peso';
+  }
+
+  // 3. Peso: "80kg", "80 kg", "peso 80", "peso: 80"
+  let weight: number | undefined = undefined;
+  const weightMatch = p.match(/(?:peso(?:\s+corporal)?(?:\s*[:=]|\s+(?:é|e|de))?\s*|tenho\s+)?(\d{2,3}(?:[.,]\d+)?)\s*(?:kg|quilos)\b/i) ||
+                      p.match(/\bpeso\s*[:=]?\s*(\d{2,3}(?:[.,]\d+)?)\b/i);
+  if (weightMatch) {
+    weight = parseFloat(weightMatch[1].replace(',', '.'));
+  }
+
+  // 4. Gordura %: "18% de gordura", "18% bf", "bf 18%", "gordura 18%"
+  let fat: number | undefined = undefined;
+  const fatMatch = p.match(/(\d{1,2}(?:[.,]\d+)?)\s*%\s*(?:de\s+)?(?:gordura|bf|massa\s+gorda)?/i) ||
+                   p.match(/(?:bf|gordura(?:\s+corporal)?)\s*[:=]?\s*(\d{1,2}(?:[.,]\d+)?)\s*%?/i);
+  if (fatMatch) {
+    const val = parseFloat(fatMatch[1].replace(',', '.'));
+    if (val >= 3 && val <= 65) fat = val;
+  }
+
+  // 5. Massa muscular: "38kg de músculo", "massa muscular 38kg"
+  let muscle: number | undefined = undefined;
+  const muscleMatch = p.match(/(\d{2}(?:[.,]\d+)?)\s*kg\s*(?:de\s+)?(?:massa\s+(?:muscular|magra)|m[uú]sculo)/i) ||
+                      p.match(/(?:massa\s+(?:muscular|magra)|m[uú]sculo)\s*[:=]?\s*(\d{2}(?:[.,]\d+)?)\s*kg/i);
+  if (muscleMatch) {
+    muscle = parseFloat(muscleMatch[1].replace(',', '.'));
+  }
+
+  // 6. Altura: "1.78m", "1,78m", "178cm"
+  let height: number | undefined = undefined;
+  const heightMatch = p.match(/(?:altura\s*[:=]?\s*)?(\d(?:[.,]\d{2}))\s*m\b/i) ||
+                      p.match(/(?:altura\s*[:=]?\s*)?(\d{3})\s*cm\b/i);
+  if (heightMatch) {
+    const val = parseFloat(heightMatch[1].replace(',', '.'));
+    height = val < 3 ? Math.round(val * 100) : Math.round(val);
+  }
+
+  return { name, goal, weight, fat, muscle, height };
+}
+
+/**
  * 1. Avaliação instantânea em tempo real via TypeSafe / JEV System One
  * executada enquanto o usuário digita (com debounce) para sugerir complementos
  * com velocidade calibrada sub-500ms.
@@ -77,7 +279,6 @@ export async function fetchRealtimeJevSuggestions(
   const key = getTypeSafeKey();
   const startTime = performance.now();
 
-  // Baseline contextual imediato caso offline ou chave pendente
   const localPills = generateInstantFallbackPills(trimmed);
 
   if (!key) {
@@ -108,6 +309,7 @@ export async function fetchRealtimeJevSuggestions(
             criteria: {
               workout: 'Musculação, ficha de treino, divisão ABC, exercícios, séries e repetições',
               diet_goals: 'Metas de calorias diárias, proteínas, carboidratos, água ou peso de referência',
+              profile_bioimpedance: 'Identificação do usuário, dados de bioimpedância, percentual de gordura, recomposição corporal ou triagem',
               meal_log: 'Alimento específico consumido (ex: arroz, frango, ovos, almoço)',
               general: 'Outro ou genérico'
             }
@@ -116,11 +318,11 @@ export async function fetchRealtimeJevSuggestions(
             type: 'choice',
             instructions: 'Qual é a especificidade ou ação pretendida?',
             criteria: {
+              profile_triage: 'Configurar perfil completo, nome e metas integradas',
+              bioimpedance_calc: 'Cálculo de déficit ou calorias a partir de peso e gordura',
               create_leg_workout: 'Ficha ou treino de pernas / membros inferiores',
               create_upper_workout: 'Ficha de peito, costas ou membros superiores',
-              adjust_calories: 'Ajuste calórico ou macronutrientes',
-              log_food: 'Registro alimentar imediato',
-              full_routine: 'Rotina ou divisão de dias da semana'
+              adjust_calories: 'Ajuste calórico ou macronutrientes'
             }
           }
         }
@@ -138,12 +340,15 @@ export async function fetchRealtimeJevSuggestions(
     const domainConfidence = data?.answers?.domain?.confidence || 1;
     const subintent = data?.answers?.subintent?.choice || '';
 
-    // Monta pills orientadas pelas escolhas do JEV
     const pills: JevSuggestionPill[] = [];
 
-    if (domainChoice === 'workout' || subintent.includes('workout')) {
+    if (domainChoice === 'profile_bioimpedance' || subintent.includes('profile') || subintent.includes('bioimpedance')) {
+      pills.push({ label: '🎯 Recomposição Corporal + Cálculo de Metas', appendText: ' e calcular metas completas para recomposição corporal' });
+      pills.push({ label: '⚖️ Estimar Déficit Calórico com Bioimpedância', appendText: ' com cálculo metabólico para queima de gordura' });
+      pills.push({ label: '💧 Adicionar Meta Hídrica (40ml/kg)', appendText: ' e meta de água ideal' });
+    } else if (domainChoice === 'workout' || subintent.includes('workout')) {
       if (trimmed.toLowerCase().includes('perna') || subintent === 'create_leg_workout') {
-        pills.push({ label: '🦵 Treino Completo (Agachamento, Leg Press e Extensora)', appendText: ' completo para hipertrofia com 4 séries de 10 a 12 reps' });
+        pills.push({ label: '🦵 Treino Completo (Agachamento, Leg Press, Extensora)', appendText: ' completo para hipertrofia com 4 séries de 10 a 12 reps' });
         pills.push({ label: '🍑 Ênfase em Glúteos & Posteriores', appendText: ' com foco em posteriores e glúteos (Stiff, Mesa Flexora e Elevação Pélvica)' });
         pills.push({ label: '📅 Terça e Sexta-feira', appendText: ' programado para terça e sexta-feira' });
       } else if (trimmed.toLowerCase().includes('peito') || trimmed.toLowerCase().includes('superior')) {
@@ -155,13 +360,12 @@ export async function fetchRealtimeJevSuggestions(
       }
     } else if (domainChoice === 'diet_goals') {
       pills.push({ label: '🔥 2.600 kcal com 180g de Proteína', appendText: ' para 2.600 kcal e meta de 180g de proteína' });
-      pills.push({ label: '🎯 Déficit Calórico (-300 kcal)', appendText: ' com déficit suave para perda de gordura' });
-      pills.push({ label: '🥩 Superávit para Ganho de Massa', appendText: ' com superávit de 300 kcal para ganho de massa' });
+      pills.push({ label: '🎯 Déficit Calórico (-450 kcal)', appendText: ' com déficit calibrado para perda de gordura' });
+      pills.push({ label: '🥩 Superávit para Ganho de Massa', appendText: ' com superávit de 350 kcal para ganho de massa' });
     } else {
       pills.push(...localPills);
     }
 
-    // Garante no mínimo 2 pills
     if (pills.length === 0) pills.push(...localPills);
 
     return {
@@ -170,7 +374,7 @@ export async function fetchRealtimeJevSuggestions(
       confidence: domainConfidence,
       pills: pills.slice(0, 4)
     };
-  } catch (err) {
+  } catch {
     return {
       latencyMs: Math.round(performance.now() - startTime),
       domain: 'local',
@@ -182,6 +386,20 @@ export async function fetchRealtimeJevSuggestions(
 
 function generateInstantFallbackPills(query: string): JevSuggestionPill[] {
   const q = query.toLowerCase();
+  if (q.includes('nome') || q.includes('matheus') || q.includes('perfil') || q.includes('triagem')) {
+    return [
+      { label: '🎯 Recomposição (Ganhar Massa & Perder Gordura)', appendText: ' e meu objetivo é recomposição corporal' },
+      { label: '🔥 Estimar Calorias & Macros Completos', appendText: ' calcular metas de calorias e macros ideais' },
+      { label: '💧 Meta Hídrica (3L de água)', appendText: ' com meta de 3 litros de água' }
+    ];
+  }
+  if (q.includes('bioimpedancia') || q.includes('gordura') || q.includes('massa') || q.includes('bf')) {
+    return [
+      { label: '⚖️ Estimar Déficit Calórico com Bioimpedância', appendText: ' estimar calorias para perda de gordura baseada na minha TMB' },
+      { label: '🥩 Proteína Alta (2.2g/kg de massa magra)', appendText: ' com proteína alta para preservar massa magra' },
+      { label: '🎯 Recomposição Corporal', appendText: ' focado em recomposição corporal' }
+    ];
+  }
   if (q.includes('perna')) {
     return [
       { label: '🦵 Treino Completo (Agachamento, Leg Press, Extensora)', appendText: ' completo para hipertrofia com 4 séries' },
@@ -233,10 +451,10 @@ export async function evaluateJevIntent(userPrompt: string, stateSummary: string
             type: 'choice',
             instructions: 'Quais áreas do aplicativo devem ser alteradas por esta instrução?',
             criteria: {
-              workout_plans: 'Criação ou atualização de planos de treino, ficha de musculação ou exercícios',
+              profile_and_goals: 'Identificação do usuário (nome), objetivo, peso de referência, bioimpedância ou triagem',
               diet_and_nutrition: 'Metas calóricas, macros (proteína/carbo/gordura) ou refeições consumidas',
-              profile_and_goals: 'Objetivo do usuário, peso de referência ou configurações gerais',
-              bulk_multi_domain: 'Combinação múltipla envolvendo treinos e dieta/metas simultaneamente',
+              workout_plans: 'Criação ou atualização de planos de treino, ficha de musculação ou exercícios',
+              bulk_multi_domain: 'Combinação múltipla envolvendo perfil, treinos e dieta/metas simultaneamente',
               body_weight: 'Pesagem corporal ou medidas de bioimpedância'
             }
           },
@@ -248,14 +466,6 @@ export async function evaluateJevIntent(userPrompt: string, stateSummary: string
               update_existing: 'Modificar planos ou metas existentes',
               both_create_and_update: 'Criar novos itens e atualizar existentes em lote'
             }
-          },
-          is_workout_change: {
-            type: 'noul',
-            instructions: 'A solicitação altera planos de treino ou exercícios?'
-          },
-          is_diet_change: {
-            type: 'noul',
-            instructions: 'A solicitação altera metas nutricionais, calorias ou refeições?'
           }
         }
       })
@@ -264,23 +474,22 @@ export async function evaluateJevIntent(userPrompt: string, stateSummary: string
     if (!res.ok) return null;
     const data = await res.json();
     return {
-      intent: data?.answers?.target_area?.choice ?? 'workout_plans',
+      intent: data?.answers?.target_area?.choice ?? 'profile_and_goals',
       confidence: data?.answers?.target_area?.confidence ?? 1,
-      action: data?.answers?.action_mode?.choice ?? 'create_new',
-      isWorkout: (data?.answers?.is_workout_change?.noul ?? 0) > 0.4,
-      isDiet: (data?.answers?.is_diet_change?.noul ?? 0) > 0.4
+      action: data?.answers?.action_mode?.choice ?? 'update_existing'
     };
   } catch {
     return null;
   }
 }
 
-// Zod schema permissivo com transformações defensivas
+// Interface defensiva da proposta gerada
 export interface AiProposal {
   summary: string;
   clarifyingQuestion?: string;
   profileUpdates?: {
-    goal?: 'Perder gordura' | 'Ganhar massa' | 'Recomposição corporal' | 'Manter peso';
+    name?: string;
+    goal?: Profile['goal'];
     calories?: number;
     protein?: number;
     carbs?: number;
@@ -343,40 +552,120 @@ export interface AiProposal {
     weight: number;
     fat?: number;
     muscle?: number;
+    waist?: number;
+    height?: number;
+    bmi?: number;
+    fatMass?: number;
+    fatFreeMass?: number;
+    basalMetabolism?: number;
   };
 }
 
 /**
- * Normaliza defensivamente a saída da IA para impedir qualquer erro de formato.
+ * Normaliza defensivamente a saída da IA com cálculos metabólicos científicos
+ * e extração robusta de entidades em português.
  */
-function normalizeRawProposal(raw: any, userPrompt: string): AiProposal {
+function normalizeRawProposal(
+  raw: any,
+  userPrompt: string,
+  currentState: AppState
+): AiProposal {
   if (!raw || typeof raw !== 'object') {
     raw = {};
   }
 
   const promptLower = userPrompt.toLowerCase();
+  const extracted = extractProfileAndBioFromPrompt(userPrompt);
 
-  // 1. Summary
-  let summary = typeof raw.summary === 'string' && raw.summary.trim()
-    ? raw.summary.trim()
-    : 'Atualizações planejadas com base no seu comando.';
-
-  // 2. Profile Updates
+  // 1. Profile Updates
   let profileUpdates: AiProposal['profileUpdates'] = undefined;
-  if (raw.profileUpdates && typeof raw.profileUpdates === 'object' && !Array.isArray(raw.profileUpdates)) {
-    const pu = raw.profileUpdates;
+  const rawPu = raw.profileUpdates && typeof raw.profileUpdates === 'object' && !Array.isArray(raw.profileUpdates)
+    ? raw.profileUpdates
+    : {};
+
+  const nameVal = rawPu.name || extracted.name;
+  const goalVal = rawPu.goal && ['Perder gordura', 'Ganhar massa', 'Recomposição corporal', 'Manter peso'].includes(rawPu.goal)
+    ? rawPu.goal
+    : extracted.goal;
+
+  // Se o usuário informou nome, objetivo ou bioimpedância, rodamos o cálculo científico completo
+  const shouldCalculateTriage = Boolean(
+    nameVal ||
+    goalVal ||
+    extracted.weight ||
+    extracted.fat ||
+    promptLower.includes('caloria') ||
+    promptLower.includes('meta') ||
+    promptLower.includes('bioimped') ||
+    promptLower.includes('triagem') ||
+    promptLower.includes('perfil')
+  );
+
+  let metabolicCalc: MetabolicCalculation | undefined = undefined;
+  if (shouldCalculateTriage) {
+    metabolicCalc = calculateMetabolicProfile({
+      weight: extracted.weight || (raw.bodyToAdd?.weight ? Number(raw.bodyToAdd.weight) : undefined),
+      fatPercent: extracted.fat !== undefined ? extracted.fat : (raw.bodyToAdd?.fat ? Number(raw.bodyToAdd.fat) : undefined),
+      muscleKg: extracted.muscle !== undefined ? extracted.muscle : (raw.bodyToAdd?.muscle ? Number(raw.bodyToAdd.muscle) : undefined),
+      height: extracted.height !== undefined ? extracted.height : (raw.bodyToAdd?.height ? Number(raw.bodyToAdd.height) : undefined),
+      goal: goalVal,
+      currentState
+    });
+  }
+
+  if (nameVal || goalVal || rawPu.calories || metabolicCalc) {
     profileUpdates = {
-      goal: ['Perder gordura', 'Ganhar massa', 'Recomposição corporal', 'Manter peso'].includes(pu.goal) ? pu.goal : undefined,
-      calories: pu.calories ? Math.round(Number(pu.calories)) : undefined,
-      protein: pu.protein ? Math.round(Number(pu.protein)) : undefined,
-      carbs: pu.carbs ? Math.round(Number(pu.carbs)) : undefined,
-      fat: pu.fat ? Math.round(Number(pu.fat)) : undefined,
-      water: pu.water ? Math.round(Number(pu.water)) : undefined,
-      targetWeight: pu.targetWeight ? Number(pu.targetWeight) : undefined
+      name: nameVal || currentState.profile.name,
+      goal: goalVal || metabolicCalc?.goal || currentState.profile.goal,
+      calories: rawPu.calories ? Math.round(Number(rawPu.calories)) : metabolicCalc?.targetKcal,
+      protein: rawPu.protein ? Math.round(Number(rawPu.protein)) : metabolicCalc?.protein,
+      carbs: rawPu.carbs ? Math.round(Number(rawPu.carbs)) : metabolicCalc?.carbs,
+      fat: rawPu.fat ? Math.round(Number(rawPu.fat)) : metabolicCalc?.fat,
+      water: rawPu.water ? Math.round(Number(rawPu.water)) : metabolicCalc?.water,
+      targetWeight: rawPu.targetWeight ? Number(rawPu.targetWeight) : metabolicCalc?.targetWeight,
+      trainTime: rawPu.trainTime || currentState.profile.trainTime,
+      mealTime: rawPu.mealTime || currentState.profile.mealTime
     };
   }
 
-  // 3. Plans To Create
+  // 2. Body Record To Add (Bioimpedância ou Peso)
+  let bodyToAdd: AiProposal['bodyToAdd'] = undefined;
+  const rawBody = raw.bodyToAdd && typeof raw.bodyToAdd === 'object' && !Array.isArray(raw.bodyToAdd) ? raw.bodyToAdd : null;
+  const bodyWeight = rawBody?.weight ? Number(rawBody.weight) : extracted.weight;
+
+  if (bodyWeight) {
+    const bodyFat = rawBody?.fat !== undefined ? Number(rawBody.fat) : extracted.fat;
+    const bodyMuscle = rawBody?.muscle !== undefined ? Number(rawBody.muscle) : extracted.muscle;
+    const bodyHeight = rawBody?.height !== undefined ? Number(rawBody.height) : extracted.height;
+    const bodyWaist = rawBody?.waist !== undefined ? Number(rawBody.waist) : undefined;
+
+    bodyToAdd = {
+      weight: bodyWeight,
+      fat: bodyFat,
+      muscle: bodyMuscle,
+      height: bodyHeight,
+      waist: bodyWaist,
+      bmi: metabolicCalc?.bmi ?? (bodyHeight ? Number((bodyWeight / Math.pow(bodyHeight / 100, 2)).toFixed(1)) : undefined),
+      fatMass: metabolicCalc?.fatMass ?? (bodyFat ? Number(((bodyWeight * bodyFat) / 100).toFixed(1)) : undefined),
+      fatFreeMass: metabolicCalc?.fatFreeMass ?? (bodyFat ? Number((bodyWeight * (1 - bodyFat / 100)).toFixed(1)) : undefined),
+      basalMetabolism: metabolicCalc?.tmb ?? (bodyFat ? Math.round(370 + 21.6 * (bodyWeight * (1 - bodyFat / 100))) : undefined)
+    };
+  }
+
+  // 3. Summary
+  let summary = typeof raw.summary === 'string' && raw.summary.trim()
+    ? raw.summary.trim()
+    : 'Planejamento e triagem concluídos com sucesso.';
+
+  if (profileUpdates && (nameVal || goalVal || bodyToAdd)) {
+    const nameStr = profileUpdates.name ? `para **${profileUpdates.name}**` : '';
+    const goalStr = profileUpdates.goal ? `focado em **${profileUpdates.goal}**` : '';
+    const kcalStr = profileUpdates.calories ? `Meta diária de **${profileUpdates.calories.toLocaleString('pt-BR')} kcal**` : '';
+    const protStr = profileUpdates.protein ? `com **${profileUpdates.protein}g de proteína**` : '';
+    summary = `Triagem realizada ${nameStr} ${goalStr}. ${kcalStr} ${protStr} calculada com base científica.`;
+  }
+
+  // 4. Plans To Create
   let plansToCreate: AiProposal['plansToCreate'] = [];
   if (Array.isArray(raw.plansToCreate) && raw.plansToCreate.length > 0) {
     plansToCreate = raw.plansToCreate.map((p: any) => {
@@ -387,14 +676,12 @@ function normalizeRawProposal(raw: any, userPrompt: string): AiProposal {
 
       const exs = Array.isArray(p.exercises) ? p.exercises.map((e: any) => {
         const exName = String(e.name || 'Exercício');
-        // Infere músculo se não fornecido
         let muscle = String(e.muscle || '');
         if (!muscle || muscle === 'Geral') {
           const match = searchLocalExercises(exName)[0];
           muscle = match ? match.muscle : (planName.toLowerCase().includes('perna') ? 'Quadríceps' : 'Peitoral');
         }
 
-        // Converte sets e reps string/faixas para inteiros seguros
         const setsVal = Math.min(15, Math.max(1, parseInt(String(e.sets || '3'), 10) || 3));
         const repsVal = Math.min(100, Math.max(1, parseInt(String(e.reps || '10'), 10) || 10));
 
@@ -418,14 +705,14 @@ function normalizeRawProposal(raw: any, userPrompt: string): AiProposal {
     });
   }
 
-  // Se o usuário pediu treino de perna mas a IA não criou exercícios, monta a ficha de ouro de pernas!
-  if (plansToCreate.length === 0 && (promptLower.includes('perna') || promptLower.includes('treino'))) {
+  // Se o comando pedia treino mas IA não retornou, gera ficha de ouro de pernas
+  if (plansToCreate.length === 0 && (promptLower.includes('perna') || (promptLower.includes('treino') && !promptLower.includes('perfil')))) {
     summary = 'Criação de treino completo de membros inferiores (Pernas) com base no catálogo de referência.';
     const legExercises = curatedExercises.filter(e => e.category === 'pernas' || e.category === 'gluteos').slice(0, 5);
     plansToCreate.push({
       name: 'Treino de Pernas & Glúteos',
-      subtitle: '5 exercícios de alta ativação · Foco em hipertrofia',
-      days: [2, 5], // Terça e Sexta
+      subtitle: '5 exercícios clássicos · Foco em hipertrofia',
+      days: [2, 5],
       exercises: legExercises.map(e => ({
         name: e.name,
         muscle: e.muscle,
@@ -438,7 +725,7 @@ function normalizeRawProposal(raw: any, userPrompt: string): AiProposal {
     });
   }
 
-  // 4. Plans To Update
+  // 5. Plans To Update
   const plansToUpdate = Array.isArray(raw.plansToUpdate) ? raw.plansToUpdate.map((u: any) => ({
     planIdOrName: String(u.planIdOrName || ''),
     name: u.name,
@@ -462,7 +749,7 @@ function normalizeRawProposal(raw: any, userPrompt: string): AiProposal {
     })) : undefined
   })).filter((u: any) => Boolean(u.planIdOrName)) : [];
 
-  // 5. Meals To Add
+  // 6. Meals To Add
   const mealsToAdd = Array.isArray(raw.mealsToAdd) ? raw.mealsToAdd.map((m: any) => ({
     name: String(m.name || 'Refeição'),
     time: String(m.time || '12:30'),
@@ -476,16 +763,6 @@ function normalizeRawProposal(raw: any, userPrompt: string): AiProposal {
       fat: Number(i.fat) || 5
     })) : []
   })) : [];
-
-  // 6. Body To Add
-  let bodyToAdd: AiProposal['bodyToAdd'] = undefined;
-  if (raw.bodyToAdd && typeof raw.bodyToAdd === 'object' && !Array.isArray(raw.bodyToAdd) && raw.bodyToAdd.weight) {
-    bodyToAdd = {
-      weight: Number(raw.bodyToAdd.weight),
-      fat: raw.bodyToAdd.fat ? Number(raw.bodyToAdd.fat) : undefined,
-      muscle: raw.bodyToAdd.muscle ? Number(raw.bodyToAdd.muscle) : undefined
-    };
-  }
 
   return {
     summary,
@@ -511,22 +788,27 @@ export async function planSmartCommand(
     throw new Error('Configure a chave do Google Gemini em API_KEYS.env para executar comandos inteligentes.');
   }
 
-  // Prepara contexto com dados de treinos existentes e catálogo de referência
   const existingPlansSummary = currentState.plans.length > 0
     ? currentState.plans.map(p => `"${p.name}" (ID: ${p.id}, ${p.exercises.length} exercícios: ${p.exercises.map(e => `${e.name} ${e.sets}x${e.reps}`).join(', ')})`).join('\n')
     : 'Nenhum plano cadastrado ainda.';
 
+  const latestBio = currentState.body.at(-1);
+  const bioSummary = latestBio
+    ? `Último peso: ${latestBio.weight}kg${latestBio.fat ? `, ${latestBio.fat}% gordura` : ''}${latestBio.muscle ? `, ${latestBio.muscle}kg músculo` : ''}`
+    : 'Nenhuma avaliação física cadastrada ainda.';
+
   const stateContext = `
-- Perfil: ${currentState.profile.name}, Objetivo: ${currentState.profile.goal}
-- Metas atuais: ${currentState.profile.calories} kcal, ${currentState.profile.protein}g Proteína, ${currentState.profile.carbs}g Carbo, ${currentState.profile.fat}g Gordura, Peso Alvo: ${currentState.profile.targetWeight}kg
-- Planos de treino existentes:
+- Perfil Atual: Nome="${currentState.profile.name}", Objetivo="${currentState.profile.goal}"
+- Metas Diárias: ${currentState.profile.calories} kcal, ${currentState.profile.protein}g Proteína, ${currentState.profile.carbs}g Carbo, ${currentState.profile.fat}g Gordura, Água: ${currentState.profile.water}ml, Peso de Referência: ${currentState.profile.targetWeight}kg
+- Avaliação Corporal: ${bioSummary}
+- Planos de Treino Existentes:
 ${existingPlansSummary}
 `;
 
   // 1. Decisão calibrada do TypeSafe JEV
   const jevResult = await evaluateJevIntent(userPrompt, stateContext);
 
-  // 2. Prompt estruturado com catálogo padrão de exercícios
+  // 2. Prompt estruturado com instruções científicas de nutrição e bioimpedância
   const exerciseExamples = curatedExercises.slice(0, 15).map(e => `${e.name} (${e.muscle})`).join(', ');
 
   const prompt = `Você é o arquiteto de treinos e nutrição do aplicativo Ritmo.
@@ -537,17 +819,26 @@ Contexto do usuário:
 ${stateContext}
 ${jevResult ? `Decisão prévia calibrada pelo JEV: Área = ${jevResult.intent} (${Math.round(jevResult.confidence * 100)}% certeza).` : ''}
 
-Catálogo de exercícios oficiais recomendados:
+Catálogo de exercícios oficiais:
 ${exerciseExamples}... e outros do banco WGER / TACO.
 
-Instruções:
-1. Crie ou atualize com precisão a ficha ou as metas solicitadas.
-2. Se o usuário digitou apenas uma frase curta como "treino de perna", monte uma ficha completa com 4 a 6 exercícios clássicos (ex: Agachamento Livre, Leg Press 45°, Cadeira Extensora, Mesa Flexora, Panturrilha).
-3. "sets" e "reps" devem ser números inteiros.
-4. "days" é um array de números inteiros de 0 a 6 (0=Dom, 1=Seg, 2=Ter, 3=Qua, 4=Qui, 5=Sex, 6=Sáb).
-5. Escreva um "summary" amigável em português explicando o que foi planejado.`;
+INSTRUÇÕES CRÍTICAS PARA PERFIL, METAS E BIOIMPEDÂNCIA:
+1. Se o usuário informar seu nome (ex: "meu nome é Matheus", "sou o Carlos"), preencha profileUpdates.name = "Matheus".
+2. Se o usuário falar sobre "ganhar massa e perder gordura" ou "recomposição", defina goal = "Recomposição corporal". Se falar em "perder gordura/emagrecer/secar/cutting", defina goal = "Perder gordura". Se falar em "ganhar massa/hipertrofia/bulking", defina goal = "Ganhar massa".
+3. Se o usuário fornecer peso, % de gordura, bioimpedância ou altura:
+   - Preencha bodyToAdd com weight, fat, muscle, height.
+   - Calcule cientificamente as metas calóricas ideais:
+     * TMB (Katch-McArdle): Massa Magra * 21.6 + 370
+     * GET (TDEE): TMB * 1.45 (atividade moderada com treino de força)
+     * Para Perder Gordura: Déficit de 400 a 500 kcal (GET - 450 kcal).
+     * Para Recomposição Corporal: Leve déficit de 180 kcal com alta proteína.
+     * Para Ganhar Massa: Superávit de 350 kcal.
+   - Preencha profileUpdates com as calorias calculadas, proteína (~2.2g/kg de massa magra ou 2.0g/kg peso), gordura (~0.8g/kg), carboidratos (saldo restante / 4), água (~40ml/kg) e targetWeight.
+4. Se o usuário pedir para preencher o perfil ou fizer uma triagem:
+   - Preencha TODOS os campos de profileUpdates para dar uma picture completa.
+5. Se o usuário pedir ficha ou treino: crie a lista de exercícios com sets e reps inteiros.
+6. Escreva um "summary" amigável e explicativo em português detalhando a estratégia adotada.`;
 
-  // Strict Gemini response schema
   const geminiSchema = {
     type: 'OBJECT',
     properties: {
@@ -556,13 +847,26 @@ Instruções:
       profileUpdates: {
         type: 'OBJECT',
         properties: {
+          name: { type: 'STRING' },
           goal: { type: 'STRING' },
           calories: { type: 'NUMBER' },
           protein: { type: 'NUMBER' },
           carbs: { type: 'NUMBER' },
           fat: { type: 'NUMBER' },
           water: { type: 'NUMBER' },
-          targetWeight: { type: 'NUMBER' }
+          targetWeight: { type: 'NUMBER' },
+          trainTime: { type: 'STRING' },
+          mealTime: { type: 'STRING' }
+        }
+      },
+      bodyToAdd: {
+        type: 'OBJECT',
+        properties: {
+          weight: { type: 'NUMBER' },
+          fat: { type: 'NUMBER' },
+          muscle: { type: 'NUMBER' },
+          height: { type: 'NUMBER' },
+          waist: { type: 'NUMBER' }
         }
       },
       plansToCreate: {
@@ -611,12 +915,6 @@ Instruções:
           },
           required: ['name']
         }
-      },
-      bodyToAdd: {
-        type: 'OBJECT',
-        properties: {
-          weight: { type: 'NUMBER' }
-        }
       }
     },
     required: ['summary']
@@ -654,98 +952,236 @@ Instruções:
     parsedRaw = { summary: 'Operação solicitada' };
   }
 
-  // Normalização defensiva
-  const proposal: AiProposal = normalizeRawProposal(parsedRaw, userPrompt);
+  // Normalização defensiva com motor científico
+  const proposal: AiProposal = normalizeRawProposal(parsedRaw, userPrompt, currentState);
 
   // 4. Monta os Smart Cards comparando com o estado atual
   const cards: SmartCardChange[] = [];
 
-  // --- Metas Nutricionais & Perfil ---
-  if (proposal.profileUpdates) {
-    const pu = proposal.profileUpdates;
-
-    if (pu.calories !== undefined && pu.calories !== currentState.profile.calories) {
-      const diff = pu.calories - currentState.profile.calories;
-      const sign = diff > 0 ? `+${diff}` : `${diff}`;
-      cards.push({
-        id: uid(),
-        category: 'diet_macros',
-        icon: 'flame',
-        title: 'Meta Calórica',
-        subtitle: 'Energia diária recomendada',
-        badge: 'Meta Diária',
-        before: `${currentState.profile.calories.toLocaleString('pt-BR')} kcal`,
-        after: `${pu.calories.toLocaleString('pt-BR')} kcal (${sign} kcal)`,
-        selected: true,
-        apply: (s) => ({
-          ...s,
-          profile: { ...s.profile, calories: pu.calories! }
-        })
-      });
-    }
-
-    if (pu.protein !== undefined && pu.protein !== currentState.profile.protein) {
-      const diff = pu.protein - currentState.profile.protein;
-      const sign = diff > 0 ? `+${diff}` : `${diff}`;
-      cards.push({
-        id: uid(),
-        category: 'diet_macros',
-        icon: 'protein',
-        title: 'Meta de Proteína',
-        subtitle: 'Aporte proteico diário',
-        badge: 'Macronutriente',
-        before: `${currentState.profile.protein}g`,
-        after: `${pu.protein}g (${sign}g)`,
-        selected: true,
-        apply: (s) => ({
-          ...s,
-          profile: { ...s.profile, protein: pu.protein! }
-        })
-      });
-    }
-
-    if (pu.carbs !== undefined || pu.fat !== undefined) {
-      const newCarbs = pu.carbs ?? currentState.profile.carbs;
-      const newFat = pu.fat ?? currentState.profile.fat;
-      cards.push({
-        id: uid(),
-        category: 'diet_macros',
-        icon: 'target',
-        title: 'Carboidratos e Gorduras',
-        subtitle: 'Balanço de macronutrientes',
-        badge: 'Metas',
-        before: `${currentState.profile.carbs}g carbo · ${currentState.profile.fat}g gordura`,
-        after: `${newCarbs}g carbo · ${newFat}g gordura`,
-        selected: true,
-        apply: (s) => ({
-          ...s,
-          profile: { ...s.profile, carbs: newCarbs, fat: newFat }
-        })
-      });
-    }
-
-    if (pu.goal || pu.targetWeight) {
-      const newGoal = pu.goal ?? currentState.profile.goal;
-      const newTargetWeight = pu.targetWeight ?? currentState.profile.targetWeight;
-      cards.push({
-        id: uid(),
-        category: 'profile_goal',
-        icon: 'target',
-        title: 'Objetivo do Perfil',
-        subtitle: 'Foco principal e peso de referência',
-        badge: 'Perfil',
-        before: `${currentState.profile.goal} (${currentState.profile.targetWeight} kg)`,
-        after: `${newGoal} (${newTargetWeight} kg)`,
-        selected: true,
-        apply: (s) => ({
-          ...s,
-          profile: { ...s.profile, goal: newGoal, targetWeight: newTargetWeight }
-        })
-      });
-    }
+  // --- 1. Nome do Usuário ---
+  if (proposal.profileUpdates?.name && proposal.profileUpdates.name !== currentState.profile.name) {
+    const newName = proposal.profileUpdates.name;
+    cards.push({
+      id: uid(),
+      category: 'profile_goal',
+      icon: 'target',
+      title: 'Nome no Perfil',
+      subtitle: 'Identificação do usuário no aplicativo',
+      badge: 'Perfil',
+      before: currentState.profile.name,
+      after: newName,
+      selected: true,
+      apply: (s) => ({
+        ...s,
+        profile: { ...s.profile, name: newName }
+      })
+    });
   }
 
-  // --- Novos Planos de Treino ---
+  // --- 2. Objetivo Principal ---
+  if (proposal.profileUpdates?.goal && proposal.profileUpdates.goal !== currentState.profile.goal) {
+    const newGoal = proposal.profileUpdates.goal;
+    cards.push({
+      id: uid(),
+      category: 'profile_goal',
+      icon: 'target',
+      title: 'Objetivo do Perfil',
+      subtitle: 'Foco principal dos treinos e da dieta',
+      badge: 'Objetivo',
+      before: currentState.profile.goal,
+      after: newGoal,
+      details: [
+        newGoal === 'Recomposição corporal'
+          ? 'Estratégia voltada para ganho de massa magra e redução concomitante de gordura corporal.'
+          : newGoal === 'Perder gordura'
+          ? 'Estratégia com déficit calórico e preservação de massa magra.'
+          : 'Estratégia com superávit para maximizar a hipertrofia muscular.'
+      ],
+      selected: true,
+      apply: (s) => ({
+        ...s,
+        profile: { ...s.profile, goal: newGoal }
+      })
+    });
+  }
+
+  // --- 3. Avaliação de Bioimpedância / Dados Corporais ---
+  if (proposal.bodyToAdd) {
+    const b = proposal.bodyToAdd;
+    const dateVal = today();
+    const detailsList: string[] = [];
+    if (b.fat !== undefined) detailsList.push(`Gordura corporal: ${b.fat}%`);
+    if (b.fatFreeMass !== undefined) detailsList.push(`Massa Magra (Livre de Gordura): ${b.fatFreeMass} kg`);
+    if (b.fatMass !== undefined) detailsList.push(`Massa Gorda: ${b.fatMass} kg`);
+    if (b.muscle !== undefined) detailsList.push(`Massa Muscular: ${b.muscle} kg`);
+    if (b.height !== undefined) detailsList.push(`Altura: ${b.height} cm`);
+    if (b.bmi !== undefined) detailsList.push(`IMC Calculado: ${b.bmi.toFixed(1)} kg/m²`);
+    if (b.basalMetabolism !== undefined) detailsList.push(`Taxa Metabólica Basal (TMB): ${b.basalMetabolism} kcal/dia`);
+
+    const lastBody = currentState.body.at(-1);
+
+    cards.push({
+      id: uid(),
+      category: 'body_metric',
+      icon: 'scale',
+      title: b.fat !== undefined ? 'Nova Avaliação de Bioimpedância' : 'Registro de Peso Corporal',
+      subtitle: `Registro salvo no histórico de evolução (${dateVal})`,
+      badge: b.fat !== undefined ? 'Bioimpedância' : 'Peso',
+      before: lastBody ? `${lastBody.weight} kg${lastBody.fat ? ` · ${lastBody.fat}% gordura` : ''}` : 'Nenhum registro anterior',
+      after: `${b.weight} kg${b.fat ? ` · ${b.fat}% gordura` : ''}`,
+      details: detailsList,
+      selected: true,
+      apply: (s) => {
+        const newRecord: BodyRecord = {
+          id: uid(),
+          date: dateVal,
+          weight: b.weight,
+          fat: b.fat ?? null,
+          muscle: b.muscle ?? null,
+          waist: b.waist ?? null,
+          height: b.height ?? null,
+          bmi: b.bmi ?? (b.height ? Number((b.weight / Math.pow(b.height / 100, 2)).toFixed(1)) : null),
+          fatMass: b.fatMass ?? (b.fat ? Number(((b.weight * b.fat) / 100).toFixed(1)) : null),
+          fatFreeMass: b.fatFreeMass ?? (b.fat ? Number((b.weight * (1 - b.fat / 100)).toFixed(1)) : null),
+          visceralFat: null,
+          basalMetabolism: b.basalMetabolism ?? (b.fat ? Math.round(370 + 21.6 * (b.weight * (1 - b.fat / 100))) : null),
+          kind: b.fat !== undefined ? 'bioimpedance' : 'measurement',
+          device: 'Comando Inteligente IA',
+          notes: 'Registrado via triagem inteligente com IA'
+        };
+        return {
+          ...s,
+          body: [...s.body, newRecord]
+        };
+      }
+    });
+  }
+
+  // --- 4. Meta Calórica ---
+  if (proposal.profileUpdates?.calories !== undefined && proposal.profileUpdates.calories !== currentState.profile.calories) {
+    const newCals = proposal.profileUpdates.calories;
+    const diff = newCals - currentState.profile.calories;
+    const sign = diff > 0 ? `+${diff}` : `${diff}`;
+    cards.push({
+      id: uid(),
+      category: 'diet_macros',
+      icon: 'flame',
+      title: 'Meta Calórica Calculada',
+      subtitle: 'Energia diária estimada com base na TMB e objetivo',
+      badge: 'Nutrição',
+      before: `${currentState.profile.calories.toLocaleString('pt-BR')} kcal`,
+      after: `${newCals.toLocaleString('pt-BR')} kcal (${sign} kcal)`,
+      details: [
+        `Calculado com fórmula de Katch-McArdle / TDEE para o seu peso e meta.`,
+        `Déficit ou superávit calibrado para máxima preservação muscular.`
+      ],
+      selected: true,
+      apply: (s) => ({
+        ...s,
+        profile: { ...s.profile, calories: newCals }
+      })
+    });
+  }
+
+  // --- 5. Meta de Proteína ---
+  if (proposal.profileUpdates?.protein !== undefined && proposal.profileUpdates.protein !== currentState.profile.protein) {
+    const newProt = proposal.profileUpdates.protein;
+    const diff = newProt - currentState.profile.protein;
+    const sign = diff > 0 ? `+${diff}` : `${diff}`;
+    cards.push({
+      id: uid(),
+      category: 'diet_macros',
+      icon: 'protein',
+      title: 'Meta Proteica',
+      subtitle: 'Aporte proteico para síntese e reparo muscular',
+      badge: 'Macronutriente',
+      before: `${currentState.profile.protein}g`,
+      after: `${newProt}g (${sign}g)`,
+      details: [
+        `Baseado em ~2.2g por kg de massa magra para recomposição ou emagrecimento.`,
+        `Fundamental para conter o catabolismo proteico durante a oxidação lipídica.`
+      ],
+      selected: true,
+      apply: (s) => ({
+        ...s,
+        profile: { ...s.profile, protein: newProt }
+      })
+    });
+  }
+
+  // --- 6. Carboidratos e Gorduras ---
+  if (
+    (proposal.profileUpdates?.carbs !== undefined && proposal.profileUpdates.carbs !== currentState.profile.carbs) ||
+    (proposal.profileUpdates?.fat !== undefined && proposal.profileUpdates.fat !== currentState.profile.fat)
+  ) {
+    const newCarbs = proposal.profileUpdates?.carbs ?? currentState.profile.carbs;
+    const newFat = proposal.profileUpdates?.fat ?? currentState.profile.fat;
+    cards.push({
+      id: uid(),
+      category: 'diet_macros',
+      icon: 'target',
+      title: 'Carboidratos & Gorduras',
+      subtitle: 'Balanço energético de macronutrientes',
+      badge: 'Metas',
+      before: `${currentState.profile.carbs}g carbo · ${currentState.profile.fat}g gordura`,
+      after: `${newCarbs}g carbo · ${newFat}g gordura`,
+      details: [
+        `Gorduras (~0.8g/kg): suporte hormonal e absorção de vitaminas lipossolúveis.`,
+        `Carboidratos: energia para intensidade nos treinos e reposição de glicogênio.`
+      ],
+      selected: true,
+      apply: (s) => ({
+        ...s,
+        profile: { ...s.profile, carbs: newCarbs, fat: newFat }
+      })
+    });
+  }
+
+  // --- 7. Meta Hídrica ---
+  if (proposal.profileUpdates?.water !== undefined && proposal.profileUpdates.water !== currentState.profile.water) {
+    const newWater = proposal.profileUpdates.water;
+    cards.push({
+      id: uid(),
+      category: 'diet_macros',
+      icon: 'target',
+      title: 'Meta de Hidratação Diária',
+      subtitle: 'Ingestão hídrica recomendada para o seu peso',
+      badge: 'Hidratação',
+      before: `${currentState.profile.water.toLocaleString('pt-BR')} ml`,
+      after: `${newWater.toLocaleString('pt-BR')} ml`,
+      details: [
+        `Cálculo: ~40 ml por kg de peso corporal.`,
+        `Essencial para transporte de nutrientes e performance neuromuscular.`
+      ],
+      selected: true,
+      apply: (s) => ({
+        ...s,
+        profile: { ...s.profile, water: newWater }
+      })
+    });
+  }
+
+  // --- 8. Peso de Referência Alvo ---
+  if (proposal.profileUpdates?.targetWeight !== undefined && proposal.profileUpdates.targetWeight !== currentState.profile.targetWeight) {
+    const newTargetWeight = proposal.profileUpdates.targetWeight;
+    cards.push({
+      id: uid(),
+      category: 'profile_goal',
+      icon: 'scale',
+      title: 'Peso Alvo de Referência',
+      subtitle: 'Meta de peso a longo prazo',
+      badge: 'Perfil',
+      before: `${currentState.profile.targetWeight} kg`,
+      after: `${newTargetWeight} kg`,
+      selected: true,
+      apply: (s) => ({
+        ...s,
+        profile: { ...s.profile, targetWeight: newTargetWeight }
+      })
+    });
+  }
+
+  // --- 9. Novos Planos de Treino ---
   if (proposal.plansToCreate && proposal.plansToCreate.length > 0) {
     for (const p of proposal.plansToCreate) {
       const dayNames = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
@@ -776,7 +1212,7 @@ Instruções:
         title: `Novo Plano: ${newPlan.name}`,
         subtitle: newPlan.subtitle,
         badge: 'Novo Treino',
-        before: 'Nenhum plano',
+        before: 'Nenhum plano cadastrado',
         after: `${newPlan.exercises.length} exercícios · Dias: ${daysStr}`,
         details: newPlan.exercises.map(e => `${e.name} (${e.muscle}): ${e.sets} séries × ${e.reps} reps · ${e.load}kg`),
         selected: true,
@@ -788,7 +1224,7 @@ Instruções:
     }
   }
 
-  // --- Atualização de Treinos Existentes ---
+  // --- 10. Atualização de Treinos Existentes ---
   if (proposal.plansToUpdate && proposal.plansToUpdate.length > 0) {
     for (const updateReq of proposal.plansToUpdate) {
       const targetPlan = currentState.plans.find(
@@ -873,7 +1309,7 @@ Instruções:
     }
   }
 
-  // --- Refeições Adicionadas ---
+  // --- 11. Refeições Adicionadas ---
   if (proposal.mealsToAdd && proposal.mealsToAdd.length > 0) {
     for (const mealReq of proposal.mealsToAdd) {
       const mealDate = today();
@@ -922,39 +1358,6 @@ Instruções:
         })
       });
     }
-  }
-
-  // --- Registro de Peso Corporal ---
-  if (proposal.bodyToAdd) {
-    const weightVal = proposal.bodyToAdd.weight;
-    const dateVal = today();
-    cards.push({
-      id: uid(),
-      category: 'body_metric',
-      icon: 'scale',
-      title: 'Registro de Peso Corporal',
-      subtitle: `Data: ${dateVal}`,
-      badge: 'Medidas',
-      before: currentState.body.at(-1) ? `${currentState.body.at(-1)?.weight} kg` : 'Sem peso',
-      after: `${weightVal} kg`,
-      selected: true,
-      apply: (s) => ({
-        ...s,
-        body: [
-          ...s.body,
-          {
-            id: uid(),
-            date: dateVal,
-            weight: weightVal,
-            fat: proposal.bodyToAdd?.fat ?? null,
-            muscle: proposal.bodyToAdd?.muscle ?? null,
-            waist: null,
-            device: 'Comando IA',
-            notes: 'Registrado via comando inteligente'
-          }
-        ]
-      })
-    });
   }
 
   return {

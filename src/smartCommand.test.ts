@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { emptyState, type AppState } from './domain';
-import { applySmartCards, type SmartCardChange } from './smartCommand';
+import { applySmartCards, calculateMetabolicProfile, type SmartCardChange } from './smartCommand';
 import { getAuditLogs, revertAuditEntry, clearAuditLogs } from './auditLog';
 
 describe('Smart Command Card Approval & State Mutations', () => {
@@ -114,5 +114,56 @@ describe('Smart Command Card Approval & State Mutations', () => {
     expect(nextState.plans).toHaveLength(1);
     expect(nextState.plans[0].name).toBe('Treino A · Peito e Tríceps');
     expect(nextState.plans[0].exercises[0].name).toBe('Supino Reto');
+  });
+
+  it('calculates scientifically calibrated metabolic targets for recomposition (Matheus)', () => {
+    const initial: AppState = emptyState();
+    const result = calculateMetabolicProfile({
+      weight: 80,
+      fatPercent: 18,
+      goal: 'Recomposição corporal',
+      currentState: initial
+    });
+
+    // FFM = 80 * (1 - 0.18) = 65.6 kg
+    expect(result.fatFreeMass).toBe(65.6);
+    // TMB (Katch-McArdle) = 370 + 21.6 * 65.6 = 1787 kcal
+    expect(result.tmb).toBe(1787);
+    // TDEE = 1787 * 1.45 = 2591 kcal
+    expect(result.tdee).toBe(2591);
+    // Recomposition target = TDEE - 180 kcal = 2411 kcal
+    expect(result.targetKcal).toBe(2411);
+    // Protein ~2.3g/kg of FFM = 65.6 * 2.3 = 151g
+    expect(result.protein).toBeGreaterThanOrEqual(150);
+    // Water ~40ml/kg = 3200ml
+    expect(result.water).toBe(3200);
+    expect(result.goal).toBe('Recomposição corporal');
+  });
+
+  it('calculates caloric deficit and body metrics for fat loss bioimpedance (82kg, 20% fat, 1.78m)', () => {
+    const initial: AppState = emptyState();
+    const result = calculateMetabolicProfile({
+      weight: 82,
+      fatPercent: 20,
+      height: 178,
+      goal: 'Perder gordura',
+      currentState: initial
+    });
+
+    // FFM = 82 * 0.8 = 65.6 kg
+    expect(result.fatFreeMass).toBe(65.6);
+    expect(result.fatMass).toBe(16.4);
+    // TMB = 1787
+    expect(result.tmb).toBe(1787);
+    // TDEE = 2591
+    expect(result.tdee).toBe(2591);
+    // Fat loss deficit = 2591 - 450 = 2141 kcal
+    expect(result.targetKcal).toBe(2141);
+    // BMI = 82 / (1.78^2) = 25.9
+    expect(result.bmi).toBe(25.9);
+    // Water = 82 * 40 = 3280ml
+    expect(result.water).toBe(3280);
+    // Target weight for ~13% fat = 65.6 / 0.87 = ~75kg
+    expect(result.targetWeight).toBe(75);
   });
 });
