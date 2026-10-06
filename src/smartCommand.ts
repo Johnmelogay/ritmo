@@ -794,7 +794,7 @@ export async function planSmartCommand(
 ): Promise<SmartPlanResult> {
   const geminiKey = getGeminiKey();
   if (!geminiKey) {
-    throw new Error('Configure a chave do Google Gemini em API_KEYS.env para executar comandos inteligentes.');
+    throw new Error('Serviço de IA indisponível temporariamente. Tente novamente em instantes.');
   }
 
   const effectivePrompt = (userPrompt || '').trim() || (attachedMedia

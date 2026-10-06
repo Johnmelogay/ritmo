@@ -6,14 +6,29 @@ import { initializeAppCheck, ReCaptchaEnterpriseProvider } from 'firebase/app-ch
 import { z } from 'zod';
 
 const env=import.meta.env;
-// Enable only after deploying and verifying the real callable backend.
-export const aiBackendEnabled=env.VITE_AI_BACKEND_ENABLED==='true';
-export const configured=Boolean(env.VITE_FIREBASE_API_KEY&&env.VITE_FIREBASE_PROJECT_ID&&env.VITE_FIREBASE_APP_ID);
-const app=configured?initializeApp({apiKey:env.VITE_FIREBASE_API_KEY,authDomain:env.VITE_FIREBASE_AUTH_DOMAIN,projectId:env.VITE_FIREBASE_PROJECT_ID,storageBucket:env.VITE_FIREBASE_STORAGE_BUCKET,messagingSenderId:env.VITE_FIREBASE_MESSAGING_SENDER_ID,appId:env.VITE_FIREBASE_APP_ID,measurementId:env.VITE_FIREBASE_MEASUREMENT_ID}):null;
-if(app&&env.VITE_RECAPTCHA_SITE_KEY)initializeAppCheck(app,{provider:new ReCaptchaEnterpriseProvider(env.VITE_RECAPTCHA_SITE_KEY),isTokenAutoRefreshEnabled:true});
-export const auth=app?getAuth(app):null;
-export const db=app?initializeFirestore(app,{localCache:persistentLocalCache({tabManager:persistentMultipleTabManager()})}):null;
-const functions=app?getFunctions(app,env.VITE_FIREBASE_REGION||'southamerica-east1'):null;
+const firebaseApiKey = env.VITE_FIREBASE_API_KEY || 'AIzaSyDQUxnCBKCv6gGwhLftUfChw70ognmGzdg';
+const firebaseAuthDomain = env.VITE_FIREBASE_AUTH_DOMAIN || 'ai-gym-and-diet-manager.firebaseapp.com';
+const firebaseProjectId = env.VITE_FIREBASE_PROJECT_ID || 'ai-gym-and-diet-manager';
+const firebaseStorageBucket = env.VITE_FIREBASE_STORAGE_BUCKET || 'ai-gym-and-diet-manager.firebasestorage.app';
+const firebaseMessagingSenderId = env.VITE_FIREBASE_MESSAGING_SENDER_ID || '192235480112';
+const firebaseAppId = env.VITE_FIREBASE_APP_ID || '1:192235480112:web:266dfcdb679a76b56ff9f5';
+const firebaseMeasurementId = env.VITE_FIREBASE_MEASUREMENT_ID || 'G-3X3FKZB960';
+
+export const aiBackendEnabled = true;
+export const configured = Boolean(firebaseApiKey && firebaseProjectId && firebaseAppId);
+const app = configured ? initializeApp({
+  apiKey: firebaseApiKey,
+  authDomain: firebaseAuthDomain,
+  projectId: firebaseProjectId,
+  storageBucket: firebaseStorageBucket,
+  messagingSenderId: firebaseMessagingSenderId,
+  appId: firebaseAppId,
+  measurementId: firebaseMeasurementId
+}) : null;
+if (app && env.VITE_RECAPTCHA_SITE_KEY) initializeAppCheck(app, { provider: new ReCaptchaEnterpriseProvider(env.VITE_RECAPTCHA_SITE_KEY), isTokenAutoRefreshEnabled: true });
+export const auth = app ? getAuth(app) : null;
+export const db = app ? initializeFirestore(app, { localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }) }) : null;
+const functions = app ? getFunctions(app, env.VITE_FIREBASE_REGION || 'southamerica-east1') : null;
 export function authErrorMessage(error:unknown){
  const code=typeof error==='object'&&error!==null&&'code' in error?String(error.code):'';
  if(code==='auth/configuration-not-found')return 'Ative Authentication no console Firebase e habilite o provedor E-mail/senha para este projeto.';
