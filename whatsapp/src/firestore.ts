@@ -9,7 +9,17 @@ let db: admin.firestore.Firestore | null = null;
 export function getFirestoreDb(): admin.firestore.Firestore {
   if (db) return db;
   if (!initialized) {
-    if (fs.existsSync(CONFIG.serviceAccountPath)) {
+    if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+      try {
+        const key = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+        admin.initializeApp({
+          credential: admin.credential.cert(key),
+          projectId: key.project_id || CONFIG.firebaseProjectId
+        });
+      } catch (e) {
+        console.error('Invalid FIREBASE_SERVICE_ACCOUNT secret:', e);
+      }
+    } else if (fs.existsSync(CONFIG.serviceAccountPath)) {
       try {
         const key = JSON.parse(fs.readFileSync(CONFIG.serviceAccountPath, 'utf-8'));
         admin.initializeApp({
