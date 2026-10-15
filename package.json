@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
+    "whatsapp": "npm --prefix whatsapp start",
+    "whatsapp:dev": "npm --prefix whatsapp run dev",
     "build": "tsc -b && vite build",
     "preview": "vite preview --host 127.0.0.1",
     "test": "vitest run",

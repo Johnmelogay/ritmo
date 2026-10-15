@@ -19,3 +19,6 @@ functions/.secret.local
 *.tsbuildinfo
 test-results/
 playwright-report/
+whatsapp/node_modules/
+whatsapp/auth_info/
+whatsapp/serviceAccountKey.json
