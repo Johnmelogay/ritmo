@@ -22,7 +22,7 @@ describe('production profile storage', () => {
   it('preserves real profiles and never copies them to another account', () => {
     const storage = memory();
     const real = emptyState();
-    real.profile.name = 'Meu perfil real';
+    real.profile.name = 'João';
     storage.setItem('account-a', JSON.stringify(real));
     expect(readStoredState(storage, 'account-a')).toEqual(real);
     expect(readStoredState(storage, 'account-b')).toEqual(emptyState());

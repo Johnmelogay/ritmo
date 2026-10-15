@@ -168,12 +168,16 @@ describe('Smart Command Card Approval & State Mutations', () => {
 
   it('plans changes from multimodal attached screenshot with OCR data', async () => {
     const initial: AppState = emptyState();
+    const { auth } = await import('./firebase');
+    if (auth) {
+      Object.defineProperty(auth, 'currentUser', { value: { uid: 'test-user', getIdToken: async () => 'test-token' }, configurable: true });
+    }
     
     // Mock global fetch for Gemini API
     const originalFetch = globalThis.fetch;
     globalThis.fetch = async (url: RequestInfo | URL, init?: RequestInit) => {
       const urlStr = String(url);
-      if (urlStr.includes('generativelanguage.googleapis.com')) {
+      if (urlStr.includes('generativelanguage.googleapis.com') || urlStr.includes('/api/ai')) {
         const bodyStr = String(init?.body || '');
         // Verify inlineData part was sent
         expect(bodyStr).toContain('inlineData');

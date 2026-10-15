@@ -18,13 +18,13 @@ export const ingredientSchema=z.object({foodId:z.string(),name:z.string().min(1)
 export type Ingredient=z.infer<typeof ingredientSchema>;
 export const mealSchema=z.object({id:z.string(),date:dateSchema,time:z.string().regex(/^\d{2}:\d{2}$/),name:z.string().min(1),items:z.array(ingredientSchema).min(1),method:z.enum(['manual','texto','foto','audio']),notes:z.string(),updatedAt:z.string()});
 export type Meal=z.infer<typeof mealSchema>;
-export const exerciseSchema=z.object({id:z.string(),name:z.string().min(1),muscle:z.string(),sets:z.number().int().min(1).max(15),reps:z.number().int().min(1).max(100),load:finite.max(1000),rest:z.number().int().min(0).max(1200),origin:originSchema});
+export const exerciseSchema=z.object({id:z.string(),name:z.string().min(1),muscle:z.string(),sets:z.number().int().min(1).max(15),reps:z.number().int().min(1).max(100),load:finite.max(1000),rest:z.number().int().min(0).max(1200),origin:originSchema,catalogId:z.string().optional(),supersetId:z.string().optional()});
 export type Exercise=z.infer<typeof exerciseSchema>;
 export const planSchema=z.object({id:z.string(),name:z.string().min(1),subtitle:z.string(),days:z.array(z.number().int().min(0).max(6)),exercises:z.array(exerciseSchema),origin:originSchema,version:z.number().int().positive()});
 export type Plan=z.infer<typeof planSchema>;
 export const setSchema=z.object({id:z.string(),reps:z.number().int().min(0).max(200),load:finite.max(1000),done:z.boolean(),rir:z.number().int().min(0).max(10)});
 export const sessionExerciseSchema=exerciseSchema.extend({logs:z.array(setSchema),reason:z.string().optional()});
-export const sessionSchema=z.object({id:z.string(),date:dateSchema,planId:z.string(),planVersion:z.number(),name:z.string(),startedAt:z.string(),finishedAt:z.string().nullable(),exercises:z.array(sessionExerciseSchema),restEnd:z.number().nullable(),notes:z.string()});
+export const sessionSchema=z.object({id:z.string(),date:dateSchema,planId:z.string(),planVersion:z.number(),name:z.string(),startedAt:z.string(),finishedAt:z.string().nullable(),exercises:z.array(sessionExerciseSchema),restEnd:z.number().nullable(),restPausedSeconds:finite.max(3600).nullable().optional(),restDuration:finite.max(3600).optional(),notes:z.string()});
 export type Session=z.infer<typeof sessionSchema>;
 export const bodySchema=z.object({id:z.string(),date:dateSchema,weight:z.number().positive().max(500),fat:finite.max(75).nullable(),muscle:finite.max(200).nullable(),waist:finite.max(300).nullable(),device:z.string(),notes:z.string(),
  kind:z.enum(['measurement','bioimpedance']).optional(),measurementTime:z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).nullable().optional(),
@@ -36,10 +36,16 @@ export const recoverySchema=z.object({id:z.string(),date:dateSchema,sleep:finite
 export type Recovery=z.infer<typeof recoverySchema>;
 export const profileSchema=z.object({name:z.string().min(1),goal:z.enum(['Perder gordura','Ganhar massa','Recomposição corporal','Manter peso']),calories:z.number().min(1000).max(6000),protein:z.number().min(30).max(400),carbs:finite.max(900),fat:z.number().min(20).max(250),water:z.number().min(500).max(6000),targetWeight:z.number().min(30).max(300),aiConsent:z.boolean(),routineConsent:z.boolean(),trainTime:z.string(),mealTime:z.string()});
 export type Profile=z.infer<typeof profileSchema>;
-export const stateSchema=z.object({schemaVersion:z.literal(1),demo:z.boolean(),profile:profileSchema,meals:z.array(mealSchema),plans:z.array(planSchema),sessions:z.array(sessionSchema),body:z.array(bodySchema),recovery:z.array(recoverySchema),water:z.record(finite.max(20000)),reviewed:z.array(dateSchema),dismissed:z.array(z.string()),routineCorrections:z.record(z.string())});
+export const trashSchema=z.discriminatedUnion('kind',[z.object({id:z.string(),kind:z.literal('plan'),removedAt:z.string(),payload:planSchema}),z.object({id:z.string(),kind:z.literal('session'),removedAt:z.string(),payload:sessionSchema})]);
+export const chatMessageSchema=z.object({id:z.string(),role:z.enum(['user','assistant']),text:z.string().min(1).max(6000),createdAt:z.string()});
+// Written AI context: today's running note, a short dated history (pruned daily) and durable facts. Size-capped to keep prompts cheap.
+export const aiMemorySchema=z.object({day:z.string().default(''),dailyNote:z.string().max(1500).default(''),history:z.array(z.object({date:dateSchema,note:z.string().min(1).max(800)})).max(14).default([]),facts:z.array(z.object({id:z.string(),text:z.string().min(1).max(200),createdAt:z.string()})).max(20).default([]),updatedAt:z.string().default('')});
+export type AiMemory=z.infer<typeof aiMemorySchema>;
+export const emptyAiMemory=():AiMemory=>({day:'',dailyNote:'',history:[],facts:[],updatedAt:''});
+export const stateSchema=z.object({ownerUid:z.string().optional(),trash:z.array(trashSchema).default([]),chat:z.array(chatMessageSchema).max(60).default([]),aiMemory:aiMemorySchema.default({}),schemaVersion:z.literal(1),demo:z.boolean(),profile:profileSchema,meals:z.array(mealSchema),plans:z.array(planSchema),sessions:z.array(sessionSchema),body:z.array(bodySchema),recovery:z.array(recoverySchema),water:z.record(finite.max(20000)),reviewed:z.array(dateSchema),dismissed:z.array(z.string()),routineCorrections:z.record(z.string())});
 export type AppState=z.infer<typeof stateSchema>;
-export const defaultProfile:Profile={name:'Você',goal:'Recomposição corporal',calories:2000,protein:150,carbs:220,fat:60,water:2500,targetWeight:70,aiConsent:true,routineConsent:true,trainTime:'18:00',mealTime:'12:30'};
-export const emptyState=():AppState=>({schemaVersion:1,demo:false,profile:{...defaultProfile},meals:[],plans:[],sessions:[],body:[],recovery:[],water:{},reviewed:[],dismissed:[],routineCorrections:{}});
+export const defaultProfile:Profile={name:'Você',goal:'Recomposição corporal',calories:2000,protein:150,carbs:220,fat:60,water:2500,targetWeight:70,aiConsent:false,routineConsent:false,trainTime:'18:00',mealTime:'12:30'};
+export const emptyState=():AppState=>({schemaVersion:1,demo:false,trash:[],chat:[],aiMemory:emptyAiMemory(),profile:{...defaultProfile},meals:[],plans:[],sessions:[],body:[],recovery:[],water:{},reviewed:[],dismissed:[],routineCorrections:{}});
 
 // Values per 100g, small curated catalog. All entries refer to the stated preparation.
 export const foods:Food[]=[
@@ -87,4 +93,4 @@ export function routineInsights(state:AppState) {
 export function csv(rows:(string|number|boolean|null)[][]) {return '\ufeff'+rows.map(row=>row.map(value=>{let v=String(value??'');if(/^[=+@\-\t\r]/.test(v))v="'"+v;return '"'+v.replaceAll('"','""')+'"';}).join(';')).join('\r\n');}
 export function download(name:string,content:Blob|string,type='text/plain;charset=utf-8') {const url=URL.createObjectURL(content instanceof Blob?content:new Blob([content],{type}));const a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),3000);}
 export function exportMeals(state:AppState){const rows:(string|number|boolean|null)[][]=[['id','data','horario','refeicao','alimento','quantidade_g','kcal','proteina_g','carboidrato_g','gordura_g','estimado','fonte']]; state.meals.forEach(m=>m.items.forEach(i=>rows.push([m.id,m.date,m.time,m.name,i.name,i.grams,i.kcal,i.protein,i.carbs,i.fat,i.estimated,i.source])));return csv(rows);}
-export function exportSets(state:AppState){const rows:(string|number|boolean|null)[][]=[['sessao_id','data','treino','exercicio','origem','serie','carga_kg','repeticoes','rir','concluida']];state.sessions.forEach(s=>s.exercises.forEach(e=>e.logs.forEach((l,i)=>rows.push([s.id,s.date,s.name,e.name,originName[e.origin],i+1,l.load,l.reps,l.rir,l.done]))));return csv(rows);}
+export function exportSets(state:AppState){const rows:(string|number|boolean|null)[][]=[['sessao_id','data','treino','exercicio','origem','serie','carga_kg','repeticoes','rir','concluida','catalogo_id','dupla_id']];state.sessions.forEach(s=>s.exercises.forEach(e=>e.logs.forEach((l,i)=>rows.push([s.id,s.date,s.name,e.name,originName[e.origin],i+1,l.load,l.reps,l.rir,l.done,e.catalogId??null,e.supersetId??null]))));return csv(rows);}

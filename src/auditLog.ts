@@ -1,4 +1,6 @@
 import { type AppState, stateSchema } from './domain';
+import { auth } from './firebase';
+import { proposalFingerprint } from './chatSafety';
 
 export type ChangeCategory =
   | 'workout_plan_new'
@@ -35,7 +37,7 @@ export interface AuditLogEntry {
   revertedAt?: string;
 }
 
-const STORAGE_KEY = 'ritmo_audit_logs_v1';
+const storageKey = () => auth?.currentUser?.uid ? `ritmo-${auth.currentUser.uid}-audit-v1` : 'ritmo_audit_logs_v1';
 
 const inMemoryStore = new Map<string, string>();
 
@@ -56,7 +58,7 @@ function getStorage() {
  */
 export function getAuditLogs(): AuditLogEntry[] {
   try {
-    const raw = getStorage().getItem(STORAGE_KEY);
+    const raw = getStorage().getItem(storageKey());
     if (!raw) return [];
     const list = JSON.parse(raw);
     if (!Array.isArray(list)) return [];
@@ -74,7 +76,7 @@ function saveAuditLogs(logs: AuditLogEntry[]) {
   try {
     // Guarda até 50 logs mais recentes para manter o armazenamento eficiente
     const trimmed = logs.slice(0, 50);
-    getStorage().setItem(STORAGE_KEY, JSON.stringify(trimmed));
+    getStorage().setItem(storageKey(), JSON.stringify(trimmed));
   } catch (err) {
     console.error('Falha ao salvar logs de auditoria:', err);
   }
@@ -178,7 +180,7 @@ export function reapplyAuditEntry(
  */
 export function clearAuditLogs(): void {
   try {
-    getStorage().removeItem(STORAGE_KEY);
+    getStorage().removeItem(storageKey());
   } catch (err) {
     console.error('Falha ao limpar logs:', err);
   }

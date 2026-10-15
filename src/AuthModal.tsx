@@ -12,9 +12,10 @@ import { auth, configured } from './firebase';
 interface AuthModalProps {
   onClose: () => void;
   onSuccess: () => void;
+  required?: boolean;
 }
 
-export function AuthModal({ onClose, onSuccess }: AuthModalProps) {
+export function AuthModal({ onClose, onSuccess, required = false }: AuthModalProps) {
   const [tab, setTab] = useState<'login' | 'signup'>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -115,16 +116,16 @@ export function AuthModal({ onClose, onSuccess }: AuthModalProps) {
   }
 
   return (
-    <div className="modal-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
+    <div className={`modal-backdrop ${required ? 'required-auth' : ''}`} onMouseDown={e => { if (!required && e.target === e.currentTarget) onClose(); }}>
       <div className="modal auth-modal-card" role="dialog" aria-modal="true" aria-label="Autenticação">
         <header className="modal-header">
           <div>
             <h2>{tab === 'login' ? 'Acessar sua conta' : 'Criar sua conta'}</h2>
             <p>Sincronize seus treinos e dieta com segurança na nuvem.</p>
           </div>
-          <button className="icon-button" aria-label="Fechar" onClick={onClose}>
+          {!required && <button className="icon-button" aria-label="Fechar" onClick={onClose}>
             <X size={20} />
-          </button>
+          </button>}
         </header>
 
         <div className="modal-body">
@@ -241,7 +242,7 @@ export function AuthModal({ onClose, onSuccess }: AuthModalProps) {
 
                 <div style={{ marginTop: 16, display: 'flex', alignItems: 'center', gap: 6, color: '#889882', fontSize: 11 }}>
                   <ShieldCheck size={14} style={{ color: '#285b49' }} />
-                  <span>Seus registros locais são sincronizados automaticamente.</span>
+                  <span>Sessão persistente neste aparelho. Dados antigos sem login só são importados com sua confirmação.</span>
                 </div>
               </form>
             </>

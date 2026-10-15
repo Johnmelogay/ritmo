@@ -2,7 +2,8 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     function owner(userId) {
-      return request.auth != null && request.auth.uid == userId;
+      return request.auth != null && request.auth.uid == userId
+        && request.auth.token.firebase.sign_in_provider != 'anonymous';
     }
     match /users/{userId}/records/{recordId} {
       allow read, delete: if owner(userId);

@@ -1,5 +1,6 @@
 node_modules/
 node_modules
+node_modules.stale-link-20261015
 node_modules.icloud-backup/
 dist/
 functions/lib/
@@ -12,6 +13,7 @@ functions/node_modules/
 API_KEYS.env
 functions/.secret.local
 .firebase/
+.recovery/
 *-debug.log
 .DS_Store
 *.tsbuildinfo

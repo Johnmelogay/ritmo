@@ -1,3 +1,4 @@
+import { secureProviderFetch as fetch } from './aiTransport';
 import { z } from 'zod';
 import {
   type AppState,
@@ -21,6 +22,7 @@ import {
   type FieldChangeSummary
 } from './auditLog';
 import { curatedExercises, searchLocalExercises } from './workoutDb';
+import { applyPlanUpdate, matchPlan, type PlanUpdateRequest } from './planEdits';
 
 export type SmartIcon = 'target' | 'flame' | 'protein' | 'dumbbell' | 'refresh' | 'utensils' | 'scale';
 
@@ -542,6 +544,8 @@ export interface AiProposal {
       load?: number;
       rest?: number;
     }>;
+    supersetsToCreate?: string[][];
+    supersetsToRemove?: string[];
   }>;
   mealsToAdd: Array<{
     name: string;
@@ -754,7 +758,13 @@ function normalizeRawProposal(
       reps: e.reps ? parseInt(String(e.reps), 10) : undefined,
       load: e.load !== undefined ? Number(e.load) : undefined,
       rest: e.rest !== undefined ? Number(e.rest) : undefined
-    })) : undefined
+    })) : undefined,
+    supersetsToCreate: Array.isArray(u.supersetsToCreate)
+      ? u.supersetsToCreate.map((g: any) => Array.isArray(g) ? g.map(String).filter(Boolean) : []).filter((g: string[]) => g.length >= 2)
+      : undefined,
+    supersetsToRemove: Array.isArray(u.supersetsToRemove)
+      ? u.supersetsToRemove.map(String).filter(Boolean)
+      : undefined
   })).filter((u: any) => Boolean(u.planIdOrName)) : [];
 
   // 6. Meals To Add
@@ -885,7 +895,12 @@ INSTRUÇÕES CRÍTICAS PARA PERFIL, METAS E BIOIMPEDÂNCIA:
 4. Se o usuário pedir para preencher o perfil ou fizer uma triagem:
    - Preencha TODOS os campos de profileUpdates para dar uma picture completa.
 5. Se o usuário pedir ficha ou treino: crie a lista de exercícios com sets e reps inteiros.
-6. Escreva um "summary" amigável e explicativo em português detalhando a estratégia adotada.${imageInstructions}`;
+6. AJUSTE DE TREINOS EXISTENTES E BI-SETS:
+   - Se o usuário pedir para transformar exercícios em bi-set (ou conjugar, super-série):
+     Em plansToUpdate, use "supersetsToCreate": [["Nome Ex 1", "Nome Ex 2"]]. Identifique o plano correto pelo nome ou dia em "planIdOrName".
+   - Se pedir para desfazer bi-set: use "supersetsToRemove": ["Nome Ex 1"].
+   - Se pedir para ajustar cargas, séries ou repetições de exercícios existentes: use "exercisesToUpdate": [{"exerciseName": "...", "sets": ..., "reps": ..., "load": ...}].
+7. Escreva um "summary" amigável e explicativo em português detalhando a estratégia adotada.${imageInstructions}`;
 
   const geminiSchema = {
     type: 'OBJECT',
@@ -949,7 +964,50 @@ INSTRUÇÕES CRÍTICAS PARA PERFIL, METAS E BIOIMPEDÂNCIA:
         items: {
           type: 'OBJECT',
           properties: {
-            planIdOrName: { type: 'STRING' }
+            planIdOrName: { type: 'STRING' },
+            name: { type: 'STRING' },
+            subtitle: { type: 'STRING' },
+            days: { type: 'ARRAY', items: { type: 'INTEGER' } },
+            exercisesToAdd: {
+              type: 'ARRAY',
+              items: {
+                type: 'OBJECT',
+                properties: {
+                  name: { type: 'STRING' },
+                  muscle: { type: 'STRING' },
+                  sets: { type: 'INTEGER' },
+                  reps: { type: 'INTEGER' },
+                  load: { type: 'NUMBER' },
+                  rest: { type: 'INTEGER' }
+                },
+                required: ['name', 'sets', 'reps']
+              }
+            },
+            exercisesToUpdate: {
+              type: 'ARRAY',
+              items: {
+                type: 'OBJECT',
+                properties: {
+                  exerciseName: { type: 'STRING' },
+                  sets: { type: 'INTEGER' },
+                  reps: { type: 'INTEGER' },
+                  load: { type: 'NUMBER' },
+                  rest: { type: 'INTEGER' }
+                },
+                required: ['exerciseName']
+              }
+            },
+            supersetsToCreate: {
+              type: 'ARRAY',
+              items: {
+                type: 'ARRAY',
+                items: { type: 'STRING' }
+              }
+            },
+            supersetsToRemove: {
+              type: 'ARRAY',
+              items: { type: 'STRING' }
+            }
           },
           required: ['planIdOrName']
         }
@@ -1286,85 +1344,54 @@ INSTRUÇÕES CRÍTICAS PARA PERFIL, METAS E BIOIMPEDÂNCIA:
   // --- 10. Atualização de Treinos Existentes ---
   if (proposal.plansToUpdate && proposal.plansToUpdate.length > 0) {
     for (const updateReq of proposal.plansToUpdate) {
-      const targetPlan = currentState.plans.find(
-        p => p.id === updateReq.planIdOrName ||
-             p.name.toLowerCase().includes(updateReq.planIdOrName.toLowerCase())
-      );
-
-      if (targetPlan) {
-        const addedDetails: string[] = [];
-        if (updateReq.exercisesToAdd) {
-          updateReq.exercisesToAdd.forEach(ex => {
-            addedDetails.push(`+ Adicionar: ${ex.name} (${ex.sets}x${ex.reps}, ${ex.load}kg)`);
-          });
-        }
-        if (updateReq.exercisesToUpdate) {
-          updateReq.exercisesToUpdate.forEach(ex => {
-            addedDetails.push(`Atualizar ${ex.exerciseName}: ${ex.sets ? `${ex.sets} séries ` : ''}${ex.reps ? `× ${ex.reps} reps ` : ''}${ex.load !== undefined ? `(${ex.load}kg)` : ''}`);
-          });
-        }
-
+      const matchResult = matchPlan(currentState.plans, updateReq.planIdOrName);
+      if (!matchResult.ok) {
         cards.push({
           id: uid(),
           category: 'workout_plan_update',
           icon: 'refresh',
-          title: `Atualizar Treino: ${targetPlan.name}`,
-          subtitle: `${targetPlan.exercises.length} exercícios atuais`,
-          badge: 'Atualização',
-          before: `${targetPlan.exercises.length} exercícios cadastrados`,
-          after: addedDetails.join(' · ') || 'Ajustes no plano',
-          details: addedDetails,
-          selected: true,
-          apply: (s) => {
-            const updated = s.plans.map(p => {
-              if (p.id !== targetPlan.id) return p;
-              let nextExercises = [...p.exercises];
-
-              if (updateReq.exercisesToUpdate) {
-                nextExercises = nextExercises.map(ex => {
-                  const match = updateReq.exercisesToUpdate?.find(
-                    u => u.exerciseName.toLowerCase() === ex.name.toLowerCase()
-                  );
-                  if (match) {
-                    return {
-                      ...ex,
-                      sets: match.sets ?? ex.sets,
-                      reps: match.reps ?? ex.reps,
-                      load: match.load ?? ex.load,
-                      rest: match.rest ?? ex.rest
-                    };
-                  }
-                  return ex;
-                });
-              }
-
-              if (updateReq.exercisesToAdd) {
-                const newExs: Exercise[] = updateReq.exercisesToAdd.map(e => ({
-                  id: uid(),
-                  name: e.name,
-                  muscle: e.muscle,
-                  sets: e.sets,
-                  reps: e.reps,
-                  load: e.load,
-                  rest: e.rest,
-                  origin: e.origin || 'ia'
-                }));
-                nextExercises = [...nextExercises, ...newExs];
-              }
-
-              return {
-                ...p,
-                name: updateReq.name ?? p.name,
-                subtitle: updateReq.subtitle ?? p.subtitle,
-                days: updateReq.days ?? p.days,
-                version: p.version + 1,
-                exercises: nextExercises
-              };
-            });
-            return { ...s, plans: updated };
-          }
+          title: `Treino não encontrado: "${updateReq.planIdOrName}"`,
+          subtitle: matchResult.reason === 'ambiguous' ? 'Nome ambíguo' : 'Plano inexistente',
+          badge: 'Atenção',
+          before: 'Nenhum plano correspondente',
+          after: matchResult.candidates.length ? `Disponíveis: ${matchResult.candidates.join(', ')}` : 'Verifique os treinos cadastrados',
+          details: [
+            matchResult.reason === 'ambiguous'
+              ? `O termo "${updateReq.planIdOrName}" corresponde a mais de um plano: ${matchResult.candidates.join(', ')}.`
+              : `Não localizamos nenhum plano com o termo "${updateReq.planIdOrName}". Planos ativos: ${matchResult.candidates.join(', ') || 'nenhum'}.`
+          ],
+          selected: false,
+          apply: (s) => s
         });
+        continue;
       }
+
+      const targetPlan = matchResult.plan;
+      const outcome = applyPlanUpdate(targetPlan, updateReq as PlanUpdateRequest);
+
+      if (!outcome.changed && outcome.warnings.length === 0) continue;
+
+      const summaryDetails = [...outcome.details, ...outcome.warnings.map(w => `⚠️ ${w}`)];
+
+      cards.push({
+        id: uid(),
+        category: 'workout_plan_update',
+        icon: 'refresh',
+        title: `Atualizar Treino: ${targetPlan.name}`,
+        subtitle: outcome.changed ? `Versão ${targetPlan.version} → ${outcome.plan.version}` : 'Nenhuma alteração aplicável',
+        badge: outcome.changed ? 'Atualização' : 'Aviso',
+        before: `${targetPlan.exercises.length} exercícios cadastrados (v${targetPlan.version})`,
+        after: outcome.details.join(' · ') || (outcome.warnings.join(' · ') || 'Sem mudanças efetivas'),
+        details: summaryDetails,
+        selected: outcome.changed,
+        apply: (s) => {
+          if (!outcome.changed) return s;
+          return {
+            ...s,
+            plans: s.plans.map(p => p.id === targetPlan.id ? outcome.plan : p)
+          };
+        }
+      });
     }
   }
 
@@ -1438,7 +1465,8 @@ export function applySmartCards(
   currentState: AppState,
   cards: SmartCardChange[],
   originalPrompt: string,
-  jevDecision?: SmartPlanResult['jevDecision']
+  jevDecision?: SmartPlanResult['jevDecision'],
+  recordImmediately = true
 ): { nextState: AppState; logEntry: AuditLogEntry } {
   const selectedCards = cards.filter(c => c.selected);
   if (selectedCards.length === 0) {
@@ -1474,7 +1502,7 @@ export function applySmartCards(
     status: 'applied'
   };
 
-  recordAuditEntry(logEntry);
+  if (recordImmediately) recordAuditEntry(logEntry);
 
   return {
     nextState: validatedState,

@@ -1,8 +1,10 @@
+import { localAiPlugin } from './dev/ai';
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
 import fs from 'node:fs';
 import path from 'node:path';
+import { recoveryPlugin } from './dev/recovery';
 
 // Automatically load API_KEYS.env if present into process.env
 const keysPath = path.resolve(__dirname, 'API_KEYS.env');
@@ -20,15 +22,10 @@ if (fs.existsSync(keysPath)) {
   }
 }
 
-const decodeB64 = (s: string) => Buffer.from(s, 'base64').toString('utf-8');
 
-// Fallback built-in defaults from user keys to ensure all deployments & users have them built-in
+// Public Firebase defaults only. AI provider secrets stay in the Node backend.
 const DEFAULT_KEYS: Record<string, string> = {
-  VITE_GEMINI_API_KEY: decodeB64('QVEuQWI4Uk42SnJxT2FmUVpyaE1YUUhDYmwySGlIcVlWWkR6aUZuLW1Vc1ZVRHFiZzlLWkE='),
-  VITE_TYPESAFE_API_KEY: decodeB64('YXBpa2V5XzIyNDVjZWZiZWY0NjQ5NjI0ZjI0YmZjYTIzMTlmZjkxNDIyOF9hNTc3ODQzZDBjOTAwNzg1MzYxYTU4ZDgyZjVhOWIyYzA4ZjM2ZTgxY2QyZTc3NTg0MmMyNjFmNTQ3YzBmY2Ux'),
-  VITE_USDA_API_KEY: decodeB64('UkJkcmZ5VGdaOHp0TzhrQ2dmcGFwb3RUNXJLMnRoY2JLWERkWWszNA=='),
-  VITE_OPENAI_API_KEY: decodeB64('c2stcHJvai1tZW16UGFaQ2dVYUlfSG5EYnlfaU9LV0lCbTIwTFdWMW84a1pJbkVrQk1UZTJsSXZUVENmTDRkQlp6NFRBYzRhRHdiQmxmdmk5MFQzQmxia0ZKMVVVVUVONmNYUVUwQ1ZzUnpqOWxwcXJVeG53TFkxSmFvQXZSOHA2SVI2cnR6X1ozMVU2LXlrdHhURW5WRTVGSHNJUGxXQzRaZ0E='),
-  VITE_FIREBASE_API_KEY: decodeB64('QUl6YVN5RFFVeG5DQktDdjZnR3doTGZ0VWZDaHc3MG9nbm1HemRn'),
+  VITE_FIREBASE_API_KEY: 'AIzaSyDQUxnCBKCv6gGwhLftUfChw70ognmGzdg',
   VITE_FIREBASE_AUTH_DOMAIN: 'ai-gym-and-diet-manager.firebaseapp.com',
   VITE_FIREBASE_PROJECT_ID: 'ai-gym-and-diet-manager',
   VITE_FIREBASE_STORAGE_BUCKET: 'ai-gym-and-diet-manager.firebasestorage.app',
@@ -36,7 +33,6 @@ const DEFAULT_KEYS: Record<string, string> = {
   VITE_FIREBASE_APP_ID: '1:192235480112:web:266dfcdb679a76b56ff9f5',
   VITE_FIREBASE_MEASUREMENT_ID: 'G-3X3FKZB960',
   VITE_FIREBASE_REGION: 'southamerica-east1',
-  VITE_AI_BACKEND_ENABLED: 'true'
 };
 
 for (const [k, v] of Object.entries(DEFAULT_KEYS)) {
@@ -46,6 +42,7 @@ for (const [k, v] of Object.entries(DEFAULT_KEYS)) {
 }
 
 export default defineConfig({
+  envPrefix: ['VITE_FIREBASE_', 'VITE_RECAPTCHA_', 'VITE_AI_BACKEND_', 'VITE_USE_FIREBASE_'],
   base: './',
   define: Object.fromEntries(
     Object.entries(DEFAULT_KEYS).map(([k, defaultVal]) => [
@@ -64,7 +61,7 @@ export default defineConfig({
     }
   },
   optimizeDeps: { entries: ['index.html'] },
-  plugins: [react(), VitePWA({
+  plugins: [localAiPlugin(), recoveryPlugin(), react(), VitePWA({
     registerType: 'prompt',
     includeAssets: ['icon.svg', 'apple-touch-icon.png'],
     manifest: {
