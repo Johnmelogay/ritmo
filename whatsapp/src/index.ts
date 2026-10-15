@@ -12,9 +12,19 @@ import { talkWithCoach } from './coach.js';
 import { extractMediaFromMessage } from './media.js';
 import { startAutonomousScheduler } from './scheduler.js';
 import { uid, type Meal } from '../../src/domain.js';
+import http from 'node:http';
 
 const silentLogger = pino({ level: 'silent' });
 const botMessageIds = new Set<string>();
+
+// Simple HTTP server for Fly.io health checks
+const port = Number(process.env.PORT) || 8080;
+http.createServer((_req, res) => {
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ status: 'ok', service: 'ritmo-whatsapp-coach' }));
+}).listen(port, '0.0.0.0', () => {
+  console.log(`🌐 Health server listening on 0.0.0.0:${port}`);
+});
 
 async function startRitmoWhatsAppDaemon() {
   console.log('🚀 Iniciando Ritmo WhatsApp Coach Daemon...');
