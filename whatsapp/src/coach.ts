@@ -65,67 +65,124 @@ INSTRUÇÕES DO COACH:
     });
   }
 
-  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(CONFIG.geminiApiKey)}`;
+  let rawText = '';
 
-  const res = await fetch(endpoint, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      systemInstruction: {
-        parts: [{ text: COACH_RULES }, { text: APP_MAP }]
-      },
-      contents: [{ role: 'user', parts }],
-      generationConfig: {
-        temperature: 0.4,
-        responseMimeType: 'application/json',
-        responseSchema: {
-          type: 'OBJECT',
-          properties: {
-            answer: { type: 'STRING' },
-            dailyNote: { type: 'STRING' },
-            facts: { type: 'ARRAY', items: { type: 'STRING' } },
-            action: {
+  if (CONFIG.geminiApiKey) {
+    try {
+      const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(CONFIG.geminiApiKey)}`;
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          systemInstruction: {
+            parts: [{ text: COACH_RULES }, { text: APP_MAP }]
+          },
+          contents: [{ role: 'user', parts }],
+          generationConfig: {
+            temperature: 0.4,
+            responseMimeType: 'application/json',
+            responseSchema: {
               type: 'OBJECT',
               properties: {
-                type: { type: 'STRING', enum: ['WATER', 'MEAL', 'SESSION', 'NONE'] },
-                waterMl: { type: 'NUMBER' },
-                mealName: { type: 'STRING' },
-                mealItems: {
-                  type: 'ARRAY',
-                  items: {
-                    type: 'OBJECT',
-                    properties: {
-                      name: { type: 'STRING' },
-                      grams: { type: 'NUMBER' },
-                      kcal: { type: 'NUMBER' },
-                      protein: { type: 'NUMBER' },
-                      carbs: { type: 'NUMBER' },
-                      fat: { type: 'NUMBER' }
+                answer: { type: 'STRING' },
+                dailyNote: { type: 'STRING' },
+                facts: { type: 'ARRAY', items: { type: 'STRING' } },
+                action: {
+                  type: 'OBJECT',
+                  properties: {
+                    type: { type: 'STRING', enum: ['WATER', 'MEAL', 'SESSION', 'NONE'] },
+                    waterMl: { type: 'NUMBER' },
+                    mealName: { type: 'STRING' },
+                    mealItems: {
+                      type: 'ARRAY',
+                      items: {
+                        type: 'OBJECT',
+                        properties: {
+                          name: { type: 'STRING' },
+                          grams: { type: 'NUMBER' },
+                          kcal: { type: 'NUMBER' },
+                          protein: { type: 'NUMBER' },
+                          carbs: { type: 'NUMBER' },
+                          fat: { type: 'NUMBER' }
+                        },
+                        required: ['name', 'grams', 'kcal', 'protein', 'carbs', 'fat']
+                      }
                     },
-                    required: ['name', 'grams', 'kcal', 'protein', 'carbs', 'fat']
-                  }
-                },
-                sessionPlanName: { type: 'STRING' },
-                sessionNotes: { type: 'STRING' }
+                    sessionPlanName: { type: 'STRING' },
+                    sessionNotes: { type: 'STRING' }
+                  },
+                  required: ['type']
+                }
               },
-              required: ['type']
+              required: ['answer']
             }
-          },
-          required: ['answer']
-        }
-      }
-    })
-  });
+          }
+        })
+      });
 
-  if (!res.ok) {
-    const err = await res.text();
-    console.error('Gemini error:', err);
-    throw new Error(`Falha no Gemini (${res.status})`);
+      if (res.ok) {
+        const json = await res.json();
+        rawText = json?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+      } else {
+        const errText = await res.text();
+        console.warn(`Gemini falhou (${res.status}), usando OpenAI como contingência...`, errText);
+      }
+    } catch (e) {
+      console.warn('Erro ao conectar ao Gemini, usando contingência...', e);
+    }
   }
 
-  const json = await res.json();
-  const rawText = json?.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!rawText) throw new Error('O Gemini não retornou texto.');
+  // Fallback to OpenAI gpt-4o-mini if Gemini didn't return text
+  if (!rawText && CONFIG.openaiApiKey) {
+    const openaiMessages: any[] = [
+      {
+        role: 'system',
+        content: `${COACH_RULES}\n${APP_MAP}\nRetorne SEMPRE um JSON válido com a estrutura:
+{
+  "answer": "sua resposta em português direto, sem saudação formal",
+  "dailyNote": "nota diária sobre o usuário ou vazio",
+  "facts": ["fatos novos aprendidos sobre o usuário"],
+  "action": {
+    "type": "WATER" | "MEAL" | "SESSION" | "NONE",
+    "waterMl": 500,
+    "mealName": "Nome da refeição",
+    "mealItems": [{"name": "Alimento", "grams": 100, "kcal": 150, "protein": 20, "carbs": 10, "fat": 2}],
+    "sessionPlanName": "Nome do treino",
+    "sessionNotes": "observações"
+  }
+}`
+      },
+      {
+        role: 'user',
+        content: prompt
+      }
+    ];
+
+    const oaiRes = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${CONFIG.openaiApiKey}`
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o-mini',
+        messages: openaiMessages,
+        response_format: { type: 'json_object' },
+        temperature: 0.3
+      })
+    });
+
+    if (oaiRes.ok) {
+      const oaiJson = await oaiRes.json();
+      rawText = oaiJson?.choices?.[0]?.message?.content || '';
+    } else {
+      const oaiErr = await oaiRes.text();
+      console.error('OpenAI error:', oaiErr);
+      throw new Error(`Falha nos provedores de IA (Gemini e OpenAI: ${oaiRes.status})`);
+    }
+  }
+
+  if (!rawText) throw new Error('Nenhum provedor de IA retornou resposta válida.');
 
   const parsed = JSON.parse(rawText);
   let action: CoachAction | undefined;

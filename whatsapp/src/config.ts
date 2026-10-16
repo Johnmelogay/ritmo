@@ -33,6 +33,7 @@ if (!userUid) {
 
 export const CONFIG = {
   geminiApiKey: process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY || '',
+  openaiApiKey: process.env.OPENAI_API_KEY || process.env.VITE_OPENAI_API_KEY || '',
   firebaseProjectId: process.env.VITE_FIREBASE_PROJECT_ID || 'ai-gym-and-diet-manager',
   userUid,
   serviceAccountPath: process.env.GOOGLE_APPLICATION_CREDENTIALS || path.resolve(__dirname, '../serviceAccountKey.json'),
