@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Check, ImagePlus, Loader2, Send, Sparkles, X } from 'lucide-react';
+import { Check, Eye, ImagePlus, Loader2, Send, Sparkles, X } from 'lucide-react';
 import { Modal } from './components';
 import { coachConversation } from './ai';
 import { planSmartCommand, applySmartCards, type AttachedMedia, type SmartPlanResult, type SmartCardChange } from './smartCommand';
@@ -8,7 +8,7 @@ import { uid, today, emptyAiMemory, type AppState } from './domain';
 import { type AuditLogEntry, getAuditLogs } from './auditLog';
 import { rolloverMemory, applyMemoryUpdate } from './aiMemory';
 
-export function ChatCommandModal({currentState,onUpdateState,onClose,onOpenAuditLogs}:{currentState:AppState;onUpdateState:(updater:(state:AppState)=>AppState,log?:AuditLogEntry)=>boolean;onClose:()=>void;onOpenAuditLogs:()=>void}){
+export function ChatCommandModal({currentState,onUpdateState,onClose,onOpenAuditLogs,onPreview}:{currentState:AppState;onUpdateState:(updater:(state:AppState)=>AppState,log?:AuditLogEntry)=>boolean;onClose:()=>void;onOpenAuditLogs:()=>void;onPreview?:(input:{nextState:AppState;logEntry:AuditLogEntry;count:number;baseline:string})=>void}){
  const [text,setText]=useState(''),[busy,setBusy]=useState(false),[error,setError]=useState('');
  const [attachment,setAttachment]=useState<AttachedMedia|null>(null);const [proposal,setProposal]=useState<SmartPlanResult>();const [cards,setCards]=useState<SmartCardChange[]>([]);const baseline=useRef('');const mounted=useRef(true);const bottom=useRef<HTMLDivElement>(null);
  useEffect(()=>{mounted.current=true;return()=>{mounted.current=false;};},[]);
@@ -76,9 +76,18 @@ export function ChatCommandModal({currentState,onUpdateState,onClose,onOpenAudit
    }
   }catch(e){setError(e instanceof Error?e.message:'Não foi possível executar.');}
  }
+ /** Computes the selected changes without saving and lets the app show them in place. */
+ function previewInApp(){
+  if(!onPreview)return;
+  try{if(baseline.current!==proposalFingerprint(currentState))throw new Error('Seus dados mudaram desde a proposta. Prepare novamente para não sobrescrever atualizações.');
+   const result=applySmartCards(currentState,cards,currentState.chat.filter(m=>m.role==='user').at(-1)?.text??'Conversa com IA',proposal?.jevDecision,false);validateApprovedChange(currentState,result.nextState);
+   onPreview({nextState:result.nextState,logEntry:result.logEntry,count:cards.filter(c=>c.selected).length,baseline:baseline.current});
+   setProposal(undefined);setCards([]);
+  }catch(e){setError(e instanceof Error?e.message:'Não foi possível preparar a prévia.');}
+ }
  return <Modal title="Converse com seu Ritmo" subtitle="Entenda sua evolução. Revise os motivos. Você confirma cada alteração." onClose={onClose} wide><div className="chat-content">
  <div className="chat-log" role="log" aria-label="Conversa com IA">{!currentState.chat.length&&<div className="chat-welcome"><Sparkles size={28}/><h3>Como posso ajudar hoje?</h3><p>Podemos conversar sobre seus registros, ajustar a rotina ou preparar mudanças nos planos. Nenhuma conversa altera dados sozinha.</p></div>}{currentState.chat.map(message=><article key={message.id} className={`chat-message ${message.role}`}><strong>{message.role==='user'?'Você':'Ritmo IA'}</strong><p>{message.text}</p><small>{new Date(message.createdAt).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})}</small></article>)}{busy&&<p role="status"><Loader2 className="spin" size={18}/> Pensando com base nos seus registros…</p>}<div ref={bottom}/></div>
- {proposal&&<section className="chat-proposal"><h3>O que pretendo fazer e por quê</h3><p>{proposal.summary}</p>{proposal.clarifyingQuestion&&<p>{proposal.clarifyingQuestion}</p>}{cards.map(card=><label className="proposal-card" key={card.id}><input type="checkbox" checked={card.selected} onChange={event=>setCards(previous=>previous.map(item=>item.id===card.id?{...item,selected:event.target.checked}:item))}/><span><strong>{card.title}</strong><small>Motivo: {card.subtitle}</small>{card.before&&<span className="proposal-before">Antes: {card.before}</span>}<span>Depois: {card.after??card.details?.join(' · ')??'Confira a descrição acima.'}</span></span></label>)}{cards.length>0&&<button className="button primary" disabled={!cards.some(c=>c.selected)||busy} onClick={approve}><Check size={18}/>Confirmar {cards.filter(c=>c.selected).length} alteração(ões) selecionada(s)</button>}<button className="button secondary" onClick={()=>{setProposal(undefined);setCards([]);}}>Cancelar proposta</button></section>}
+ {proposal&&<section className="chat-proposal"><h3>O que pretendo fazer e por quê</h3><p>{proposal.summary}</p>{proposal.clarifyingQuestion&&<p>{proposal.clarifyingQuestion}</p>}{cards.map(card=><label className="proposal-card" key={card.id}><input type="checkbox" checked={card.selected} onChange={event=>setCards(previous=>previous.map(item=>item.id===card.id?{...item,selected:event.target.checked}:item))}/><span><strong>{card.title}</strong><small>Motivo: {card.subtitle}</small>{card.before&&<span className="proposal-before">Antes: {card.before}</span>}<span>Depois: {card.after??card.details?.join(' · ')??'Confira a descrição acima.'}</span></span></label>)}{cards.length>0&&onPreview&&<button className="button primary" disabled={!cards.some(c=>c.selected)||busy} onClick={previewInApp}><Eye size={18}/>Ver no app antes de confirmar</button>}{cards.length>0&&<button className={`button ${onPreview?'secondary':'primary'}`} disabled={!cards.some(c=>c.selected)||busy} onClick={approve}><Check size={18}/>Confirmar {cards.filter(c=>c.selected).length} alteração(ões) selecionada(s)</button>}<button className="button secondary" onClick={()=>{setProposal(undefined);setCards([]);}}>Cancelar proposta</button></section>}
  {error&&<p className="error" role="alert">{error}</p>}
  {!currentState.profile.aiConsent&&<p className="notice">Ative “Análise por IA” em Perfil para enviar mensagens e os resumos necessários aos provedores configurados.</p>}
  {attachment&&<div className="chat-attachment"><span>{attachment.name}</span><button className="icon-button" aria-label="Remover anexo" onClick={()=>setAttachment(null)}><X size={18}/></button></div>}
