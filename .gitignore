@@ -1,4 +1,5 @@
 node_modules/
+.archive/
 node_modules
 node_modules.stale-link-20261015
 node_modules.icloud-backup/
@@ -19,6 +20,3 @@ functions/.secret.local
 *.tsbuildinfo
 test-results/
 playwright-report/
-whatsapp/node_modules/
-whatsapp/auth_info/
-whatsapp/serviceAccountKey.json

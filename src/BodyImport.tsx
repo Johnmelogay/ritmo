@@ -33,7 +33,7 @@ export function BioModal({records,date,existing,onClose,onSave}:{records:BodyRec
    if(!mounted.current)return;setPreview(URL.createObjectURL(file));setFileName(file.name.slice(0,200));
 
    if(getAiStatus().gemini){
-     setStatus('Lendo laudo com Gemini 2.5 Flash Vision…');
+     setStatus('Lendo laudo com IA…');
      try{
        const aiRes=await extractBioimpedanceWithGemini(file);
        if(mounted.current){

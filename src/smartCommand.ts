@@ -1,4 +1,5 @@
 import { secureProviderFetch as fetch } from './aiTransport';
+import { providerResponseError } from './aiErrors';
 import { z } from 'zod';
 import {
   type AppState,
@@ -23,6 +24,8 @@ import {
 } from './auditLog';
 import { curatedExercises, searchLocalExercises } from './workoutDb';
 import { applyPlanUpdate, matchPlan, type PlanUpdateRequest } from './planEdits';
+import { removeSessionExercise, replaceSessionExercise } from './training';
+export { executeWorkoutToolCall, AI_WORKOUT_TOOLS, type AiWorkoutToolDefinition, type ToolCallResult } from './aiWorkoutTools';
 
 export type SmartIcon = 'target' | 'flame' | 'protein' | 'dumbbell' | 'refresh' | 'utensils' | 'scale';
 
@@ -546,6 +549,19 @@ export interface AiProposal {
     }>;
     supersetsToCreate?: string[][];
     supersetsToRemove?: string[];
+    exercisesToRemove?: string[];
+    exercisesToReplace?: Array<{
+      exerciseName: string;
+      replacement: {
+        name: string;
+        muscle?: string;
+        sets?: number;
+        reps?: number;
+        load?: number;
+        rest?: number;
+        origin?: Origin;
+      };
+    }>;
   }>;
   mealsToAdd: Array<{
     name: string;
@@ -764,6 +780,27 @@ function normalizeRawProposal(
       : undefined,
     supersetsToRemove: Array.isArray(u.supersetsToRemove)
       ? u.supersetsToRemove.map(String).filter(Boolean)
+      : undefined,
+    exercisesToRemove: Array.isArray(u.exercisesToRemove)
+      ? u.exercisesToRemove.map(String).filter(Boolean)
+      : undefined,
+    exercisesToReplace: Array.isArray(u.exercisesToReplace)
+      ? u.exercisesToReplace.map((r: any) => {
+          const exName = String(r.exerciseName || r.oldExerciseName || '');
+          const repObj = r.replacement || r.newExercise || {};
+          return {
+            exerciseName: exName,
+            replacement: {
+              name: String(repObj.name || 'Novo exercício'),
+              muscle: repObj.muscle ? String(repObj.muscle) : undefined,
+              sets: repObj.sets ? Number(repObj.sets) : undefined,
+              reps: repObj.reps ? Number(repObj.reps) : undefined,
+              load: repObj.load !== undefined ? Number(repObj.load) : undefined,
+              rest: repObj.rest !== undefined ? Number(repObj.rest) : undefined,
+              origin: 'ia' as Origin
+            }
+          };
+        }).filter((r: any) => Boolean(r.exerciseName && r.replacement?.name))
       : undefined
   })).filter((u: any) => Boolean(u.planIdOrName)) : [];
 
@@ -824,10 +861,16 @@ export async function planSmartCommand(
     ? `Último peso: ${latestBio.weight}kg${latestBio.fat ? `, ${latestBio.fat}% gordura` : ''}${latestBio.muscle ? `, ${latestBio.muscle}kg músculo` : ''}`
     : 'Nenhuma avaliação física cadastrada ainda.';
 
+  const activeSession = currentState.sessions.find(s => !s.finishedAt);
+  const activeSessionSummary = activeSession
+    ? `"${activeSession.name}" (${activeSession.exercises.length} exercícios: ${activeSession.exercises.map(e => `${e.name} [${e.logs.filter(l => l.done).length}/${e.logs.length} séries feitas, carga: ${e.load}kg]`).join(', ')})`
+    : 'Nenhuma sessão em andamento no momento.';
+
   const stateContext = `
 - Perfil Atual: Nome="${currentState.profile.name}", Objetivo="${currentState.profile.goal}"
 - Metas Diárias: ${currentState.profile.calories} kcal, ${currentState.profile.protein}g Proteína, ${currentState.profile.carbs}g Carbo, ${currentState.profile.fat}g Gordura, Água: ${currentState.profile.water}ml, Peso de Referência: ${currentState.profile.targetWeight}kg
 - Avaliação Corporal: ${bioSummary}
+- Sessão de Treino Aberta Agora: ${activeSessionSummary}
 - Planos de Treino Existentes:
 ${existingPlansSummary}
 `;
@@ -895,7 +938,9 @@ INSTRUÇÕES CRÍTICAS PARA PERFIL, METAS E BIOIMPEDÂNCIA:
 4. Se o usuário pedir para preencher o perfil ou fizer uma triagem:
    - Preencha TODOS os campos de profileUpdates para dar uma picture completa.
 5. Se o usuário pedir ficha ou treino: crie a lista de exercícios com sets e reps inteiros.
-6. AJUSTE DE TREINOS EXISTENTES E BI-SETS:
+6. AJUSTE DE TREINOS EXISTENTES, REMOÇÃO, SUBSTITUIÇÃO E BI-SETS:
+   - Se o usuário pedir para remover um exercício do treino: em plansToUpdate, use "exercisesToRemove": ["Nome do exercício"].
+   - Se pedir para substituir um exercício por outro: em plansToUpdate, use "exercisesToReplace": [{"oldExerciseName": "Nome antigo", "newExercise": {"name": "Nome novo", "muscle": "Grupo muscular", "sets": 3, "reps": 10, "load": 20, "rest": 90}}].
    - Se o usuário pedir para transformar exercícios em bi-set (ou conjugar, super-série):
      Em plansToUpdate, use "supersetsToCreate": [["Nome Ex 1", "Nome Ex 2"]]. Identifique o plano correto pelo nome ou dia em "planIdOrName".
    - Se pedir para desfazer bi-set: use "supersetsToRemove": ["Nome Ex 1"].
@@ -1007,6 +1052,42 @@ INSTRUÇÕES CRÍTICAS PARA PERFIL, METAS E BIOIMPEDÂNCIA:
             supersetsToRemove: {
               type: 'ARRAY',
               items: { type: 'STRING' }
+            },
+            exercisesToRemove: {
+              type: 'ARRAY',
+              items: { type: 'STRING' }
+            },
+            exercisesToReplace: {
+              type: 'ARRAY',
+              items: {
+                type: 'OBJECT',
+                properties: {
+                  exerciseName: { type: 'STRING' },
+                  oldExerciseName: { type: 'STRING' },
+                  replacement: {
+                    type: 'OBJECT',
+                    properties: {
+                      name: { type: 'STRING' },
+                      muscle: { type: 'STRING' },
+                      sets: { type: 'INTEGER' },
+                      reps: { type: 'INTEGER' },
+                      load: { type: 'NUMBER' },
+                      rest: { type: 'INTEGER' }
+                    }
+                  },
+                  newExercise: {
+                    type: 'OBJECT',
+                    properties: {
+                      name: { type: 'STRING' },
+                      muscle: { type: 'STRING' },
+                      sets: { type: 'INTEGER' },
+                      reps: { type: 'INTEGER' },
+                      load: { type: 'NUMBER' },
+                      rest: { type: 'INTEGER' }
+                    }
+                  }
+                }
+              }
             }
           },
           required: ['planIdOrName']
@@ -1026,7 +1107,7 @@ INSTRUÇÕES CRÍTICAS PARA PERFIL, METAS E BIOIMPEDÂNCIA:
     required: ['summary']
   };
 
-  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(geminiKey)}`;
+  const endpoint = 'ritmo://ai/generate';
 
   const contentParts: any[] = [];
   if (attachedMedia && attachedMedia.data) {
@@ -1052,7 +1133,7 @@ INSTRUÇÕES CRÍTICAS PARA PERFIL, METAS E BIOIMPEDÂNCIA:
   });
 
   if (!res.ok) {
-    throw new Error(`Falha no provedor de IA (${res.status}). Verifique sua conexão ou tente novamente.`);
+    throw await providerResponseError(res);
   }
 
   const jsonResponse = await res.json();
@@ -1386,10 +1467,66 @@ INSTRUÇÕES CRÍTICAS PARA PERFIL, METAS E BIOIMPEDÂNCIA:
         selected: outcome.changed,
         apply: (s) => {
           if (!outcome.changed) return s;
-          return {
+          let nextState: AppState = {
             ...s,
             plans: s.plans.map(p => p.id === targetPlan.id ? outcome.plan : p)
           };
+          const active = nextState.sessions.find(x => !x.finishedAt && (x.planId === targetPlan.id || x.name === targetPlan.name));
+          if (active) {
+            let updatedSession = active;
+            if (updateReq.exercisesToRemove) {
+              for (const rem of updateReq.exercisesToRemove) {
+                const ex = updatedSession.exercises.find(e => e.name.toLowerCase() === rem.toLowerCase());
+                if (ex) updatedSession = removeSessionExercise(updatedSession, ex.id);
+              }
+            }
+            if (updateReq.exercisesToReplace) {
+              for (const rep of updateReq.exercisesToReplace) {
+                const ex = updatedSession.exercises.find(e => e.name.toLowerCase() === rep.exerciseName.toLowerCase());
+                if (ex) {
+                  updatedSession = replaceSessionExercise(
+                    updatedSession,
+                    ex.id,
+                    {
+                      name: rep.replacement.name,
+                      muscle: rep.replacement.muscle || ex.muscle,
+                      reps: rep.replacement.reps || ex.reps,
+                      load: rep.replacement.load !== undefined ? rep.replacement.load : ex.load,
+                      reason: 'Instrução da IA'
+                    }
+                  );
+                }
+              }
+            }
+            if (updateReq.exercisesToAdd) {
+              const newExs = updateReq.exercisesToAdd.map(e => ({
+                id: uid(),
+                name: e.name,
+                muscle: e.muscle,
+                sets: e.sets,
+                reps: e.reps,
+                load: e.load,
+                rest: e.rest,
+                origin: 'ia' as const,
+                logs: Array.from({ length: e.sets }, () => ({
+                  id: uid(),
+                  reps: e.reps,
+                  load: e.load,
+                  done: false,
+                  rir: 2
+                }))
+              }));
+              updatedSession = {
+                ...updatedSession,
+                exercises: [...updatedSession.exercises, ...newExs]
+              };
+            }
+            nextState = {
+              ...nextState,
+              sessions: nextState.sessions.map(x => x.id === active.id ? updatedSession : x)
+            };
+          }
+          return nextState;
         }
       });
     }

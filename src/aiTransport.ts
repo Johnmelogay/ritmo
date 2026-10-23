@@ -6,7 +6,7 @@ export async function secureProviderFetch(url:string,options:RequestInit={}):Pro
  const user=auth?.currentUser;
  if(!user||user.isAnonymous)throw new Error('Entre na sua conta para conversar com a IA.');
  if(!gatewayConfigured)throw new Error('O backend privado de IA ainda precisa ser publicado.');
- const provider=url.includes('generativelanguage.googleapis.com')?'gemini':url.includes('typesafe')?'jev':null;
+ const provider=url==='ritmo://ai/generate'||url.includes('generativelanguage.googleapis.com')?'deepseek':url.includes('typesafe')?'jev':null;
  if(!provider)throw new Error('Provedor não autorizado.');
  const input={provider,body:JSON.parse(String(options.body||'{}'))};
  if(import.meta.env.DEV){return fetch('/api/ai',{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${await user.getIdToken()}`},body:JSON.stringify(input),signal:options.signal});}

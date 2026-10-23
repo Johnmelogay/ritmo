@@ -4,7 +4,7 @@ import { exerciseSchema, uid, type Exercise, type Origin } from './domain';
 import { curatedExercises, type DbExercise } from './workoutDb';
 import { normalizeExercise } from './training';
 
-function ExerciseChoice({ label, name, setName, onPick }: { label: string; name: string; setName: (value: string) => void; onPick: (ex: DbExercise) => void }) {
+export function ExerciseChoice({ label, name, setName, onPick }: { label: string; name: string; setName: (value: string) => void; onPick: (ex: DbExercise) => void }) {
   const listId = useId();
   const [open, setOpen] = useState(false);
   const matches = useMemo(() => {

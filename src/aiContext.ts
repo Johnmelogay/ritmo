@@ -1,5 +1,5 @@
 import { dailyTotals, dateFrom, sessionVolume, type AiMemory, type AppState } from './domain';
-import { exerciseHistory } from './training';
+import { exerciseHistory, sessionAdaptations } from './training';
 import { compactPlan } from './planEdits';
 import { type AuditLogEntry } from './auditLog';
 
@@ -87,6 +87,9 @@ export function buildDataContext(state: AppState, day: string, audit: AuditLogEn
 
   const changes = audit.slice(0, 5);
   if (changes.length) out.push(`Histórico de alterações (recentes): ${changes.map(a => `${a.timestamp.slice(0, 10)} [${a.status === 'applied' ? 'aplicada' : 'revertida'}] ${a.changes.map(c => c.label).join(', ')}`).join('; ')}.`);
+
+  const adaptations = sessionAdaptations(state.sessions).slice(0, 5);
+  if (adaptations.length) out.push(`Variações e adaptações nos treinos (recentes): ${adaptations.map(a => `${a.date.slice(5)} ${a.sessionName}: ${a.originalName} → ${a.newName} (${a.reason})`).join('; ')}.`);
 
   return cap(out.join('\n'), CONTEXT_LIMITS.data);
 }

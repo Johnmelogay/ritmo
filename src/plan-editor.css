@@ -1,0 +1,39 @@
+/* Keep the plan editor independent of legacy generic list-row styles. */
+.plan-editor-modal{display:flex;flex-direction:column;overflow:hidden}
+.plan-editor-modal>.modal-header,.plan-editor-modal>.modal-footer{position:relative;inset:auto;flex-shrink:0}
+.plan-editor-modal>.modal-body{min-height:0;overflow:auto;overscroll-behavior:contain;padding:24px;scroll-padding-block:16px}
+.plan-editor-modal>.modal-body>label{font-size:13px;line-height:1.5}.plan-editor-modal>.modal-body>label>input,.plan-editor-modal>.modal-body>label>select{min-height:46px;font-size:16px;padding:11px 12px;width:100%}
+.plan-editor-modal .day-toggles{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:6px;max-width:360px}.plan-editor-modal .day-toggles>button{width:100%;min-width:0;min-height:44px}
+.plan-editor-modal .plan-ex-list{display:flex;flex-direction:column;gap:12px;margin:16px 0 24px}
+.plan-editor-modal .plan-ex-list>.plan-superset-card{display:block;padding:12px;margin:0;border:1px solid #c8d9c5;background:#f5f8f3}
+.plan-editor-modal .plan-superset-bar{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:0 0 12px;margin:0 0 12px}
+.plan-editor-modal .plan-superset-items{display:flex;flex-direction:column;gap:10px;min-width:0}
+.plan-editor-modal .plan-ex-row,.plan-editor-modal .plan-ex-row-sub{display:grid;grid-template-columns:auto minmax(0,1fr) auto auto 44px;align-items:center;gap:12px;padding:14px;margin:0;border:1px solid #e0e8dc;background:#fff;border-radius:10px;min-width:0}
+.plan-editor-modal .plan-ex-row>strong,.plan-editor-modal .plan-ex-row-sub>strong{font-size:14px;line-height:1.5;font-weight:600;overflow-wrap:anywhere;min-width:0}
+.plan-editor-modal .plan-ex-list small{font-size:12px;line-height:1.6;color:#718168;margin-top:4px}
+.plan-editor-modal .exercise-index{width:32px;height:36px;font-size:14px;flex-shrink:0}
+.plan-editor-modal .exercise-order-controls{gap:8px;min-width:0}
+.plan-editor-modal .exercise-order-btn{width:32px;height:32px}
+.plan-editor-modal .plan-ex-list .button{min-height:44px;font-size:13px;padding:10px 14px;white-space:normal}
+.plan-editor-modal .plan-ex-list .icon-button{width:44px;height:44px}
+.plan-editor-modal .plan-ex-list>.plan-inline-editor,.plan-editor-modal .plan-inline-editor{display:block;padding:18px;margin:0;border:1px solid #d4e1cf;border-radius:10px;background:#f8faf6;font-size:14px;min-width:0}
+.plan-editor-modal .plan-inline-editor>.duo-fields{display:flex;flex-direction:column;gap:16px;border:0;border-radius:0;padding:0;margin:0;min-width:0}
+.plan-editor-modal .plan-inline-editor h3{font-size:17px;line-height:1.4;margin:0}
+.plan-editor-modal .plan-inline-editor label{display:flex;flex-direction:column;gap:7px;margin:0;font-size:13px;line-height:1.5;min-width:0}
+.plan-editor-modal .plan-inline-editor input,.plan-editor-modal .plan-inline-editor select{width:100%;min-width:0;min-height:46px;margin:0;font-size:16px;padding:11px 12px}
+.plan-editor-modal .plan-inline-editor .form-row{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+.plan-editor-modal .plan-inline-editor .form-row>label{min-width:0}
+.plan-editor-modal .plan-inline-editor .button-row{display:flex;gap:10px;flex-wrap:wrap}
+.plan-editor-modal .plan-inline-editor .button-row>.button{flex:1;min-height:46px}
+.plan-editor-modal .plan-inline-editor .duo-toggle{flex-direction:row;align-items:center}
+.plan-editor-modal .plan-inline-editor input[type=checkbox]{width:24px;min-height:24px;flex-shrink:0}
+@media(max-width:600px){
+ .plan-editor-modal>.modal-header{padding:18px 16px;gap:12px}.plan-editor-modal>.modal-header h2{font-size:21px}.plan-editor-modal>.modal-header p{font-size:12px;line-height:1.6}.plan-editor-modal>.modal-header .icon-button{width:44px;height:44px}
+ .plan-editor-modal>.modal-body{padding:16px}.plan-editor-modal>.modal-footer{padding:12px 16px calc(12px + env(safe-area-inset-bottom));gap:10px}.plan-editor-modal>.modal-footer>.small{max-width:none;font-size:11px}.plan-editor-modal>.modal-footer>.button{min-height:48px}
+ .plan-editor-modal .plan-ex-list-header{gap:6px;align-items:flex-start;flex-direction:column}.plan-editor-modal .plan-ex-list-header>small{font-size:11px;line-height:1.6}
+ .plan-editor-modal .plan-ex-list>.plan-superset-card{padding:10px}.plan-editor-modal .plan-superset-bar{gap:10px;align-items:flex-start}.plan-editor-modal .plan-superset-bar>.text-button{min-height:44px;font-size:12px!important}
+ .plan-editor-modal .plan-ex-row{grid-template-columns:64px minmax(0,1fr) 44px;gap:8px;padding:12px}.plan-editor-modal .plan-ex-row>.exercise-order-controls{grid-column:1;grid-row:1/4;display:grid;grid-template-columns:repeat(2,32px);gap:0;align-self:start}.plan-editor-modal .plan-ex-row .exercise-index{grid-column:1/-1;grid-row:1;justify-self:center;margin-bottom:6px}.plan-editor-modal .plan-ex-row .order-buttons-col{display:contents}.plan-editor-modal .plan-ex-row .exercise-order-btn{min-width:32px;width:32px;height:44px}.plan-editor-modal .plan-ex-row>.exercise-order-controls>.exercise-drag-handle{display:none}
+ .plan-editor-modal .plan-ex-row>strong{grid-column:2;grid-row:1}.plan-editor-modal .plan-ex-row>.badge{grid-column:2;grid-row:2;justify-self:start}.plan-editor-modal .plan-ex-row>.button{grid-column:2/4;grid-row:3}.plan-editor-modal .plan-ex-row>.icon-button{grid-column:3;grid-row:1}
+ .plan-editor-modal .plan-ex-row-sub{grid-template-columns:28px minmax(0,1fr) 44px;gap:8px;padding:12px}.plan-editor-modal .plan-ex-row-sub>.exercise-index{grid-column:1;grid-row:1;width:28px}.plan-editor-modal .plan-ex-row-sub>strong{grid-column:2;grid-row:1}.plan-editor-modal .plan-ex-row-sub>.icon-button{grid-column:3;grid-row:1}.plan-editor-modal .plan-ex-row-sub>.badge{grid-column:2;grid-row:2;justify-self:start}.plan-editor-modal .plan-ex-row-sub>.button{grid-column:2/4;grid-row:3}
+ .plan-editor-modal .plan-ex-list>.plan-inline-editor,.plan-editor-modal .plan-inline-editor{padding:14px}.plan-editor-modal .plan-inline-editor .form-row{gap:12px}.plan-editor-modal .plan-ex-list small{font-size:12px}.plan-editor-modal .plan-ex-row>strong,.plan-editor-modal .plan-ex-row-sub>strong{font-size:14px}
+}

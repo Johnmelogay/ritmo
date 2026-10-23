@@ -1,5 +1,6 @@
 import { secureProviderFetch as fetch, gatewayConfigured } from './aiTransport';
 import { auth } from './firebase';
+import { providerResponseError } from './aiErrors';
 import { today } from './domain';
 import { dailyReviewContext } from './training';
 import { z } from 'zod';
@@ -15,10 +16,10 @@ export const DEFAULT_TYPESAFE_API_KEY='';
 export const DEFAULT_USDA_API_KEY='';
 export const DEFAULT_OPENAI_API_KEY='';
 export function getGeminiKey(){return gatewayConfigured&&auth?.currentUser?'backend-managed':'';}
-export function getTypeSafeKey(){return gatewayConfigured&&auth?.currentUser?'backend-managed':'';}
+export function getTypeSafeKey(){return '';}
 export function getUsdaKey(){return '';}
 export function getOpenAiKey(){return '';}
-export function getAiStatus(){const configured=gatewayConfigured&&Boolean(auth?.currentUser);return {gemini:configured,typesafe:configured,usda:false,ready:configured};}
+export function getAiStatus(){const configured=gatewayConfigured&&Boolean(auth?.currentUser);return {deepseek:configured,gemini:false,typesafe:false,usda:false,ready:configured};}
 
 export interface CoachReply { answer: string; dailyNote: string; facts: string[] }
 
@@ -35,8 +36,8 @@ export async function coachConversation(state: AppState, messages: AppState['cha
  const firstToday=messages.filter(m=>m.role==='user').length<=1;
  const prompt=`${buildMemoryBlock(state.aiMemory,day)}\n\nDADOS ATUAIS (podem estar parciais):\n${buildDataContext(state,day,audit)}\n\nCONVERSA DE HOJE (mais recentes):\n${recentConversation(messages)}\n\n${firstToday?'Primeira mensagem do dia: continue a partir da memória quando fizer sentido, sem saudação.':'Continue a conversa sem saudação.'}\nRetorne JSON com answer (até 2500 caracteres), dailyNote e facts.`;
  const parts:unknown[]=[{text:prompt}];if(media)parts.push({inlineData:media});
- const response=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${key}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({systemInstruction:{parts:[{text:COACH_RULES},{text:APP_MAP}]},contents:[{role:'user',parts}],generationConfig:{temperature:0.5,responseMimeType:'application/json',responseSchema:{type:'OBJECT',properties:{answer:{type:'STRING'},dailyNote:{type:'STRING'},facts:{type:'ARRAY',items:{type:'STRING'}}},required:['answer','dailyNote']}}}),signal:AbortSignal.timeout(55000)});
- if(!response.ok)throw new Error('Não foi possível conversar com a IA agora. Nenhum dado foi alterado.');
+ const response=await fetch('ritmo://ai/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({systemInstruction:{parts:[{text:COACH_RULES},{text:APP_MAP}]},contents:[{role:'user',parts}],generationConfig:{temperature:0.5,responseMimeType:'application/json',responseSchema:{type:'OBJECT',properties:{answer:{type:'STRING'},dailyNote:{type:'STRING'},facts:{type:'ARRAY',items:{type:'STRING'}}},required:['answer','dailyNote']}}}),signal:AbortSignal.timeout(55000)});
+ if(!response.ok)throw await providerResponseError(response);
  const result=await response.json();const raw=result?.candidates?.[0]?.content?.parts?.[0]?.text;
  if(!raw)throw new Error('A IA não retornou uma resposta.');
  const parsed=z.object({answer:z.string().min(1).max(6000),dailyNote:z.string().default(''),facts:z.array(z.string()).default([])}).parse(JSON.parse(raw));
@@ -64,7 +65,7 @@ export const estimateSchema = z.object({
 export type EstimateResult = z.infer<typeof estimateSchema>;
 
 /**
- * Estima alimentos, porções e nutrientes via Google Gemini 2.5 Flash
+ * Estima alimentos, porções e nutrientes via Google DeepSeek V4.1 Flash
  * utilizando entrada de texto, foto ou gravação de áudio.
  */
 export async function estimateMeal(input: {
@@ -113,7 +114,7 @@ Retorne estritamente o JSON especificado.`;
     });
   }
 
-  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(key)}`;
+  const endpoint = 'ritmo://ai/generate';
 
   const response = await fetch(endpoint, {
     method: 'POST',
@@ -157,17 +158,17 @@ Retorne estritamente o JSON especificado.`;
 
   if (!response.ok) {
     const errText = await response.text();
-    let msg = `Falha na API Gemini (${response.status})`;
+    let msg = `Falha na análise por IA (${response.status})`;
     try {
       const parsedErr = JSON.parse(errText);
-      if (parsedErr?.error?.message) msg = `Gemini: ${parsedErr.error.message}`;
+      if (parsedErr?.error?.message) msg = parsedErr.error.message;
     } catch { /* use generic msg */ }
     throw new Error(msg);
   }
 
   const data = await response.json();
   const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!rawText) throw new Error('O Gemini não retornou conteúdo para esta refeição.');
+  if (!rawText) throw new Error('A IA não retornou conteúdo para esta refeição.');
 
   const parsed = estimateSchema.parse(JSON.parse(rawText));
 
@@ -188,7 +189,7 @@ Retorne estritamente o JSON especificado.`;
       protein: Math.round(Number(item.protein) * 10) / 10,
       carbs: Math.round(Number(item.carbs) * 10) / 10,
       fat: Math.round(Number(item.fat) * 10) / 10,
-      source: item.source || 'Gemini 2.5 Flash · Estimativa'
+      source: item.source || 'DeepSeek V4.1 Flash · Estimativa'
     };
   });
 
@@ -300,7 +301,7 @@ Retorne um JSON com:
 - "body": texto em português claro, dividido em 2 parágrafos curtos.
 `;
 
-    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(geminiKey)}`;
+    const endpoint = 'ritmo://ai/generate';
     const res = await fetch(endpoint, {
       signal: AbortSignal.timeout(45000),
       method: 'POST',
@@ -329,7 +330,7 @@ Retorne um JSON com:
         return {
           title: parsed.title,
           body: parsed.body,
-          source: jevDecision ? 'Análise combinada Gemini 2.5 Flash + Jev 1.13' : 'Gemini 2.5 Flash · Revisão diária'
+          source: jevDecision ? 'Análise combinada DeepSeek V4.1 Flash + Jev 1.13' : 'DeepSeek V4.1 Flash · Revisão diária'
         };
       }
     }
@@ -354,14 +355,14 @@ Retorne um JSON com:
 }
 
 /**
- * Extrai todos os campos de um laudo ou tela de bioimpedância usando Gemini 2.5 Flash Vision.
+ * Extrai todos os campos de um laudo ou tela de bioimpedância usando DeepSeek V4.1 Flash Vision.
  */
 export async function extractBioimpedanceWithGemini(file: File | Blob): Promise<{
   draft: BioDraft;
   warnings: string[];
 }> {
   const key = getGeminiKey();
-  if (!key) throw new Error('Chave do Google Gemini não encontrada.');
+  if (!key) throw new Error('Backend de IA não configurado ou conta desconectada.');
 
   const base64Data = await new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
@@ -396,7 +397,7 @@ Campos a extrair:
 Se um campo numérico não estiver legível ou não existir no laudo, retorne null.
 Retorne também um array "warnings" com notas sobre a qualidade da imagem ou dados que mereçam conferência.`;
 
-  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(key)}`;
+  const endpoint = 'ritmo://ai/generate';
 
   const response = await fetch(endpoint, {
     method: 'POST',
@@ -437,12 +438,12 @@ Retorne também um array "warnings" com notas sobre a qualidade da imagem ou dad
   });
 
   if (!response.ok) {
-    throw new Error(`Falha ao ler bioimpedância com Gemini (${response.status})`);
+    throw await providerResponseError(response);
   }
 
   const data = await response.json();
   const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!rawText) throw new Error('Nenhum dado retornado pelo Gemini para esta imagem.');
+  if (!rawText) throw new Error('Nenhum dado retornado pela IA para esta imagem.');
 
   const parsed = JSON.parse(rawText);
 
@@ -461,7 +462,7 @@ Retorne também um array "warnings" com notas sobre a qualidade da imagem ou dad
     height: parsed.height != null ? String(parsed.height) : '',
     bmi: parsed.bmi != null ? String(parsed.bmi) : '',
     muscleType: (['esqueletica', 'muscular', 'nao-informada'].includes(parsed.muscleType) ? parsed.muscleType : 'nao-informada') as BioDraft['muscleType'],
-    device: parsed.device || 'Extraído via Gemini Vision'
+    device: parsed.device || 'Extraído por IA'
   };
 
   return {

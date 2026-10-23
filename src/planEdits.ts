@@ -124,8 +124,10 @@ export interface PlanUpdateRequest {
   name?: string;
   subtitle?: string;
   days?: number[];
-  exercisesToAdd?: Array<{ name: string; muscle: string; sets: number; reps: number; load: number; rest: number; origin: Origin }>;
-  exercisesToUpdate?: Array<{ exerciseName: string; sets?: number; reps?: number; load?: number; rest?: number }>;
+  exercisesToAdd?: Array<{ name: string; muscle: string; sets: number; reps: number; load: number; rest: number; origin?: Origin; catalogId?: string; notes?: string }>;
+  exercisesToUpdate?: Array<{ exerciseName: string; sets?: number; reps?: number; load?: number; rest?: number; notes?: string }>;
+  exercisesToRemove?: string[];
+  exercisesToReplace?: Array<{ exerciseName: string; replacement: { name: string; muscle?: string; sets?: number; reps?: number; load?: number; rest?: number; catalogId?: string; notes?: string; reason?: string } }>;
   supersetsToCreate?: string[][];
   supersetsToRemove?: string[];
 }
@@ -146,8 +148,8 @@ export function applyPlanUpdate(plan: Plan, req: PlanUpdateRequest): PlanUpdateO
     const match = matchExercise(exercises, upd.exerciseName);
     if (!match.ok) { warnings.push(matchError(upd.exerciseName, match)); continue; }
     const ex = match.exercise;
-    const patch = { sets: clampInt(upd.sets, 1, 15), reps: clampInt(upd.reps, 1, 100), load: upd.load === undefined || !Number.isFinite(upd.load) ? undefined : Math.min(1000, Math.max(0, upd.load)), rest: clampInt(upd.rest, 0, 1200) };
-    const next = { ...ex, sets: patch.sets ?? ex.sets, reps: patch.reps ?? ex.reps, load: patch.load ?? ex.load, rest: patch.rest ?? ex.rest };
+    const patch = { sets: clampInt(upd.sets, 1, 15), reps: clampInt(upd.reps, 1, 100), load: upd.load === undefined || !Number.isFinite(upd.load) ? undefined : Math.min(1000, Math.max(0, upd.load)), rest: clampInt(upd.rest, 0, 1200), notes: upd.notes !== undefined ? upd.notes.trim() : undefined };
+    const next = { ...ex, sets: patch.sets ?? ex.sets, reps: patch.reps ?? ex.reps, load: patch.load ?? ex.load, rest: patch.rest ?? ex.rest, ...(patch.notes !== undefined ? { notes: patch.notes } : {}) };
     if (JSON.stringify(next) === JSON.stringify(ex)) continue;
     exercises = exercises.map(item => {
       if (item.id === ex.id) return next;
@@ -156,6 +158,52 @@ export function applyPlanUpdate(plan: Plan, req: PlanUpdateRequest): PlanUpdateO
       return item;
     });
     details.push(`Ajustar ${ex.name}: ${describe(ex)} → ${describe(next)}${next.rest !== ex.rest ? ` · ${next.rest}s` : ''}`);
+  }
+
+  for (const name of req.exercisesToRemove ?? []) {
+    const match = matchExercise(exercises, name);
+    if (!match.ok) { warnings.push(matchError(name, match)); continue; }
+    const ex = match.exercise;
+    if (ex.supersetId) {
+      const remainingPartners = exercises.filter(item => item.supersetId === ex.supersetId && item.id !== ex.id);
+      if (remainingPartners.length <= 1) {
+        exercises = exercises.map(item => {
+          if (item.supersetId === ex.supersetId) {
+            const copy = { ...item };
+            delete copy.supersetId;
+            return copy;
+          }
+          return item;
+        });
+      }
+    }
+    exercises = exercises.filter(item => item.id !== ex.id);
+    details.push(`Remover ${ex.name} (${describe(ex)})`);
+  }
+
+  for (const rep of req.exercisesToReplace ?? []) {
+    const match = matchExercise(exercises, rep.exerciseName);
+    if (!match.ok) { warnings.push(matchError(rep.exerciseName, match)); continue; }
+    const ex = match.exercise;
+    const rName = rep.replacement.name.trim();
+    if (!rName) { warnings.push(`Nome do exercício de substituição inválido.`); continue; }
+    const patch = {
+      name: rName,
+      muscle: rep.replacement.muscle?.trim() || ex.muscle,
+      sets: clampInt(rep.replacement.sets, 1, 15) ?? ex.sets,
+      reps: clampInt(rep.replacement.reps, 1, 100) ?? ex.reps,
+      load: rep.replacement.load === undefined || !Number.isFinite(rep.replacement.load) ? ex.load : Math.min(1000, Math.max(0, rep.replacement.load)),
+      rest: clampInt(rep.replacement.rest, 0, 1200) ?? ex.rest,
+      catalogId: rep.replacement.catalogId,
+      notes: rep.replacement.notes ?? ex.notes,
+    };
+    const next: Exercise = {
+      ...ex,
+      ...patch,
+      origin: 'ia',
+    };
+    exercises = exercises.map(item => item.id === ex.id ? next : item);
+    details.push(`Substituir ${ex.name} por ${next.name} (${describe(next)})`);
   }
 
   for (const name of req.supersetsToRemove ?? []) {
@@ -172,7 +220,7 @@ export function applyPlanUpdate(plan: Plan, req: PlanUpdateRequest): PlanUpdateO
 
   for (const add of req.exercisesToAdd ?? []) {
     if (matchExercise(exercises, add.name).ok) { warnings.push(`"${add.name}" já existe neste plano; não foi duplicado.`); continue; }
-    exercises.push({ id: uid(), name: add.name, muscle: add.muscle, sets: add.sets, reps: add.reps, load: add.load, rest: add.rest, origin: add.origin || 'ia' });
+    exercises.push({ id: uid(), name: add.name, muscle: add.muscle, sets: add.sets, reps: add.reps, load: add.load, rest: add.rest, origin: add.origin || 'ia', catalogId: add.catalogId, notes: add.notes });
     details.push(`Adicionar ${add.name} (${add.sets}×${add.reps}${add.load ? ` · ${add.load} kg` : ''})`);
   }
 
@@ -199,4 +247,144 @@ export function compactPlan(plan: Plan) {
     parts.push(`BI-SET[${plan.exercises.filter(e => e.supersetId === ex.supersetId).map(line).join(' + ')}]`);
   }
   return `"${plan.name}" (id ${plan.id}, ${days}, v${plan.version}): ${parts.join('; ')}`;
+}
+
+export type BiSetSettingsAction =
+  | { type: 'none' }
+  | { type: 'unpair' }
+  | { type: 'pair_existing'; partnerId: string }
+  | { type: 'create_new'; partner: { name: string; muscle?: string; reps: number; load?: number; catalogId?: string } };
+
+/**
+ * Handles updating an exercise in a plan and optionally forming or dismantling a bi-set:
+ * - 'none': standard update (if in a bi-set, syncs sets and rest with partner)
+ * - 'unpair': detaches exercise and its partner from any bi-set
+ * - 'pair_existing': groups with an existing exercise in the plan, sharing sets and rest, and places them consecutively
+ * - 'create_new': creates a new partner exercise, sharing sets and rest, and places it right after this exercise
+ */
+export function applyExerciseSettings(
+  exercises: Exercise[],
+  updatedExercise: Exercise,
+  action: BiSetSettingsAction = { type: 'none' },
+): Exercise[] {
+  let list = [...exercises];
+  const targetIndex = list.findIndex(e => e.id === updatedExercise.id);
+  if (targetIndex === -1) return list;
+
+  const currentOriginal = list[targetIndex];
+  const hadSuperset = Boolean(currentOriginal.supersetId);
+  const oldSupersetId = currentOriginal.supersetId;
+
+  if (action.type === 'unpair') {
+    const unlinked = { ...updatedExercise };
+    delete unlinked.supersetId;
+    return list.map(e => {
+      if (e.id === updatedExercise.id) return unlinked;
+      if (oldSupersetId && e.supersetId === oldSupersetId) {
+        const copy = { ...e };
+        delete copy.supersetId;
+        return copy;
+      }
+      return e;
+    });
+  }
+
+  if (action.type === 'pair_existing') {
+    // If target was already in a superset with someone else, unpair that someone else
+    if (hadSuperset && oldSupersetId) {
+      list = list.map(e => {
+        if (e.supersetId === oldSupersetId && e.id !== updatedExercise.id) {
+          const copy = { ...e };
+          delete copy.supersetId;
+          return copy;
+        }
+        return e;
+      });
+    }
+
+    const partner = list.find(e => e.id === action.partnerId);
+    if (!partner || partner.id === updatedExercise.id) {
+      return list.map(e => e.id === updatedExercise.id ? updatedExercise : e);
+    }
+
+    // If partner was in another superset, unpair that group first
+    if (partner.supersetId) {
+      const partnerOldSuper = partner.supersetId;
+      list = list.map(e => {
+        if (e.supersetId === partnerOldSuper) {
+          const copy = { ...e };
+          delete copy.supersetId;
+          return copy;
+        }
+        return e;
+      });
+    }
+
+    const newSupersetId = uid();
+    const finalCurrent: Exercise = { ...updatedExercise, supersetId: newSupersetId };
+    const finalPartner: Exercise = {
+      ...partner,
+      sets: updatedExercise.sets,
+      rest: updatedExercise.rest,
+      supersetId: newSupersetId,
+    };
+
+    // Remove partner and target, and insert both at target's original relative position
+    const withoutBoth = list.filter(e => e.id !== updatedExercise.id && e.id !== partner.id);
+    const pos = list.findIndex(e => e.id === updatedExercise.id);
+    const beforeCount = list.slice(0, pos).filter(e => e.id !== partner.id).length;
+
+    return [
+      ...withoutBoth.slice(0, beforeCount),
+      finalCurrent,
+      finalPartner,
+      ...withoutBoth.slice(beforeCount),
+    ];
+  }
+
+  if (action.type === 'create_new') {
+    // If target was in an old superset, unpair former partner
+    if (hadSuperset && oldSupersetId) {
+      list = list.map(e => {
+        if (e.supersetId === oldSupersetId && e.id !== updatedExercise.id) {
+          const copy = { ...e };
+          delete copy.supersetId;
+          return copy;
+        }
+        return e;
+      });
+    }
+
+    const newSupersetId = uid();
+    const finalCurrent: Exercise = { ...updatedExercise, supersetId: newSupersetId };
+    const newPartner: Exercise = {
+      id: uid(),
+      name: action.partner.name.trim(),
+      muscle: action.partner.muscle?.trim() || updatedExercise.muscle || 'Geral',
+      sets: updatedExercise.sets,
+      reps: action.partner.reps,
+      load: action.partner.load || 0,
+      rest: updatedExercise.rest,
+      origin: updatedExercise.origin,
+      supersetId: newSupersetId,
+      ...(action.partner.catalogId ? { catalogId: action.partner.catalogId } : {}),
+    };
+
+    const pos = list.findIndex(e => e.id === updatedExercise.id);
+    return [
+      ...list.slice(0, pos),
+      finalCurrent,
+      newPartner,
+      ...list.slice(pos + 1),
+    ];
+  }
+
+  // action.type === 'none'
+  return list.map(item => {
+    if (item.id === updatedExercise.id) return updatedExercise;
+    if (updatedExercise.supersetId && item.supersetId === updatedExercise.supersetId) {
+      return { ...item, sets: updatedExercise.sets, rest: updatedExercise.rest };
+    }
+    return item;
+  });
 }

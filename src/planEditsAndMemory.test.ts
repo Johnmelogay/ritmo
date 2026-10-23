@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { emptyState, type AppState, type Plan } from './domain';
-import { matchExercise, matchPlan, createSuperset, removeSuperset, applyPlanUpdate, type PlanUpdateRequest } from './planEdits';
+import { matchExercise, matchPlan, createSuperset, removeSuperset, applyPlanUpdate, applyExerciseSettings, type PlanUpdateRequest } from './planEdits';
 import { exerciseHistory } from './training';
 import { rolloverMemory, applyMemoryUpdate, stripGreeting } from './aiMemory';
 import { buildDataContext, buildMemoryBlock, recentConversation } from './aiContext';
@@ -163,4 +163,96 @@ describe('AI Context Management, Daily Note & Anti-Greeting Behavior', () => {
     expect(context.length).toBeLessThan(5000);
     expect(context).toContain('Hoje: 2026-10-15');
   });
+
+  describe('applyExerciseSettings (PWA bi-set creation & exercise tuning)', () => {
+    const plan: Plan = {
+      id: 'plan-test',
+      name: 'Treino A',
+      subtitle: 'Peito e ombros',
+      days: [1],
+      version: 1,
+      origin: 'personal',
+      exercises: [
+        { id: 'ex-1', name: 'Supino Reto com Barra Reta', muscle: 'Peito', sets: 4, reps: 10, load: 80, rest: 90, origin: 'personal' },
+        { id: 'ex-2', name: 'Elevação Lateral com Halteres', muscle: 'Ombros', sets: 3, reps: 12, load: 14, rest: 60, origin: 'personal' },
+        { id: 'ex-3', name: 'Tríceps Corda', muscle: 'Tríceps', sets: 3, reps: 12, load: 25, rest: 60, origin: 'personal' }
+      ]
+    };
+
+    it('turns an exercise into a bi-set by pairing with an existing exercise of the day', () => {
+      const initial = [...plan.exercises];
+      const supinoUpdated = { ...initial[0], sets: 4, rest: 75 };
+      const res = applyExerciseSettings(initial, supinoUpdated, {
+        type: 'pair_existing',
+        partnerId: 'ex-3' // Tríceps Corda
+      });
+
+      expect(res).toHaveLength(3);
+      const [supino, triceps, elevacao] = res;
+      // Pair formed and grouped sequentially
+      expect(supino.id).toBe('ex-1');
+      expect(triceps.id).toBe('ex-3');
+      expect(supino.supersetId).toBeDefined();
+      expect(triceps.supersetId).toBe(supino.supersetId);
+
+      // Shared sets and rest
+      expect(supino.sets).toBe(4);
+      expect(triceps.sets).toBe(4);
+      expect(supino.rest).toBe(75);
+      expect(triceps.rest).toBe(75);
+
+      // Third exercise remains unaffected
+      expect(elevacao.id).toBe('ex-2');
+      expect(elevacao.supersetId).toBeUndefined();
+    });
+
+    it('turns an exercise into a bi-set by adding a new partner exercise', () => {
+      const initial = [...plan.exercises];
+      const supinoUpdated = { ...initial[0], sets: 3, rest: 60 };
+      const res = applyExerciseSettings(initial, supinoUpdated, {
+        type: 'create_new',
+        partner: {
+          name: 'Crucifixo Inclinado com Halteres',
+          muscle: 'Peito',
+          reps: 15,
+          load: 18
+        }
+      });
+
+      expect(res).toHaveLength(4);
+      const [supino, crucifixo, elevacao, triceps] = res;
+      expect(supino.id).toBe('ex-1');
+      expect(crucifixo.name).toBe('Crucifixo Inclinado com Halteres');
+      expect(crucifixo.muscle).toBe('Peito');
+      expect(crucifixo.reps).toBe(15);
+      expect(crucifixo.load).toBe(18);
+
+      // Both share sets and rest
+      expect(crucifixo.sets).toBe(3);
+      expect(crucifixo.rest).toBe(60);
+      expect(supino.supersetId).toBeDefined();
+      expect(crucifixo.supersetId).toBe(supino.supersetId);
+
+      // Other exercises preserved
+      expect(elevacao.id).toBe('ex-2');
+      expect(triceps.id).toBe('ex-3');
+    });
+
+    it('unpairs an existing bi-set into individual exercises', () => {
+      // Start with a paired set
+      const paired = applyExerciseSettings(plan.exercises, plan.exercises[0], {
+        type: 'pair_existing',
+        partnerId: 'ex-2'
+      });
+      expect(paired[0].supersetId).toBeDefined();
+      expect(paired[1].supersetId).toBe(paired[0].supersetId);
+
+      // Now unpair via settings
+      const unpaired = applyExerciseSettings(paired, paired[0], { type: 'unpair' });
+      expect(unpaired[0].supersetId).toBeUndefined();
+      expect(unpaired[1].supersetId).toBeUndefined();
+      expect(unpaired).toHaveLength(3);
+    });
+  });
 });
+

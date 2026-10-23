@@ -71,7 +71,7 @@ export function OnboardingModal({ onClose, onOpenAuth }: OnboardingModalProps) {
       icon: <Utensils size={30} />,
       colorClass: 'orange',
       title: 'Registro ágil por foto, voz ou texto',
-      subtitle: 'Com o Google Gemini 2.5 Flash conectado, você pode fotografar seu prato ou gravar um áudio dizendo o que comeu.',
+      subtitle: 'Com o DeepSeek Flash conectado, você pode fotografar seu prato ou usar o ditado do teclado para descrever o que comeu.',
       highlights: [
         {
           icon: <Camera size={18} />,

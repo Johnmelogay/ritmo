@@ -1,5 +1,5 @@
 import { localAiPlugin } from './dev/ai';
-import { defineConfig } from 'vite';
+import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
 import fs from 'node:fs';
@@ -7,7 +7,8 @@ import path from 'node:path';
 import { recoveryPlugin } from './dev/recovery';
 
 // Automatically load API_KEYS.env if present into process.env
-const keysPath = path.resolve(__dirname, 'API_KEYS.env');
+for (const keysFile of ['API_KEYS.env', '.env.deepseek']) {
+const keysPath = path.resolve(__dirname, keysFile);
 if (fs.existsSync(keysPath)) {
   const lines = fs.readFileSync(keysPath, 'utf-8').split('\n');
   for (const line of lines) {
@@ -21,6 +22,7 @@ if (fs.existsSync(keysPath)) {
     }
   }
 }
+}
 
 
 // Public Firebase defaults only. AI provider secrets stay in the Node backend.
@@ -33,6 +35,7 @@ const DEFAULT_KEYS: Record<string, string> = {
   VITE_FIREBASE_APP_ID: '1:192235480112:web:266dfcdb679a76b56ff9f5',
   VITE_FIREBASE_MEASUREMENT_ID: 'G-3X3FKZB960',
   VITE_FIREBASE_REGION: 'southamerica-east1',
+  VITE_AI_BACKEND_ENABLED: 'true',
 };
 
 for (const [k, v] of Object.entries(DEFAULT_KEYS)) {
@@ -51,14 +54,7 @@ export default defineConfig({
     ])
   ),
   server: {
-    watch: { ignored: ['**/node_modules.icloud-backup/**'] },
-    proxy: {
-      '/api/typesafe': {
-        target: 'https://api.typesafe.ai',
-        changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api\/typesafe/, '')
-      }
-    }
+    watch: { ignored: ['**/node_modules.icloud-backup/**', '**/.archive/**'] },
   },
   optimizeDeps: { entries: ['index.html'] },
   plugins: [localAiPlugin(), recoveryPlugin(), react(), VitePWA({

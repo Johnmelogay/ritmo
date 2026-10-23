@@ -1,14 +1,15 @@
 import { PlanExerciseSettings } from './PlanExerciseSettings';
 import { ExerciseComposer as ExerciseForm } from './ExerciseComposer';
-import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { X, ChevronLeft, ChevronRight, Plus, Camera, Mic, Type, Search, Check, Trash2, Sparkles, Loader2, Square, CircleHelp, ArrowUpRight } from 'lucide-react';
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { X, ChevronLeft, ChevronRight, Plus, Camera, Mic, Type, Search, Check, Trash2, Sparkles, Loader2, Square, CircleHelp, ArrowUpRight, ChevronUp, ChevronDown, GripVertical, RefreshCw } from 'lucide-react';
 import { dateFrom, dateKey, foods, ingredient, nutrients, number, uid, today, type Meal, type Ingredient, type Exercise, type Plan, type Origin } from './domain';
 import { estimateMeal, getAiStatus } from './ai';
+import { reorderPlanUnits, swapPlanBiSetExercises } from './training';
 
-export function Modal({title,subtitle,children,onClose,wide=false}:{title:string;subtitle?:string;children:ReactNode;onClose:()=>void;wide?:boolean}){
+export function Modal({title,subtitle,children,onClose,wide=false,className=''}:{title:string;subtitle?:string;children:ReactNode;onClose:()=>void;wide?:boolean;className?:string}){
  const ref=useRef<HTMLDivElement>(null);const close=useRef(onClose);close.current=onClose;
  useEffect(()=>{const previous=document.activeElement as HTMLElement;const overflow=document.body.style.overflow;document.body.style.overflow='hidden';ref.current?.focus();const key=(e:KeyboardEvent)=>{if(e.key==='Escape')close.current();if(e.key==='Tab'){const elements=ref.current?.querySelectorAll<HTMLElement>('button:not([disabled]),input:not([disabled]),select,textarea,a[href],[tabindex="0"]');if(!elements?.length)return;const first=elements[0],last=elements[elements.length-1];if(e.shiftKey&&(document.activeElement===first||document.activeElement===ref.current)){e.preventDefault();last.focus();}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus();}}};document.addEventListener('keydown',key);return()=>{document.body.style.overflow=overflow;document.removeEventListener('keydown',key);previous?.focus();};},[]);
- return <div className="modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)onClose();}}><div ref={ref} className={`modal ${wide?'modal-wide':''}`} role="dialog" aria-modal="true" aria-label={title} tabIndex={-1}><header className="modal-header"><div><h2>{title}</h2>{subtitle&&<p>{subtitle}</p>}</div><button className="icon-button" aria-label="Fechar" onClick={onClose}><X size={21}/></button></header>{children}</div></div>;
+ return <div className="modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)onClose();}}><div ref={ref} className={`modal ${wide?'modal-wide':''} ${className}`} role="dialog" aria-modal="true" aria-label={title} tabIndex={-1}><header className="modal-header"><div><h2>{title}</h2>{subtitle&&<p>{subtitle}</p>}</div><button className="icon-button" aria-label="Fechar" onClick={onClose}><X size={21}/></button></header>{children}</div></div>;
 }
 export function Badge({origin}:{origin:Origin}) {return <span className={`badge badge-${origin}`}><span/>{origin==='personal'?'Personal':origin==='ia'?'IA':'Você'}</span>;}
 export function Empty({icon, title,body,action}:{icon?:ReactNode;title:string;body:string;action?:ReactNode}){return <div className="empty-state"><div className="empty-icon">{icon??<CircleHelp size={25}/>}</div><h3>{title}</h3><p>{body}</p>{action}</div>;}
@@ -23,17 +24,382 @@ export function MealModal({date,consent,onSave,onClose,existing}:{date:string;co
  const totals=nutrients(items);const filtered=foods.filter(f=>f.name.toLocaleLowerCase('pt-BR').normalize('NFD').replace(/[\u0300-\u036f]/g,'').includes(search.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'')));
  async function attach(file:File|Blob){if(file.size>8*1024*1024){setError('Use um arquivo menor que 8 MB.');return;}const data=await new Promise<string>((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(String(r.result));r.onerror=reject;r.readAsDataURL(file);});if(mounted.current)setMedia({data:data.split(',')[1],mimeType:file.type,preview:data});}
  async function photo(file:File){setError('');try{if(file.size>20*1024*1024)throw new Error('Escolha uma imagem de até 20 MB.');const url=URL.createObjectURL(file);const img=new Image();await new Promise<void>((ok,no)=>{img.onload=()=>ok();img.onerror=no;img.src=url;});const scale=Math.min(1,1400/Math.max(img.width,img.height));const canvas=document.createElement('canvas');canvas.width=img.width*scale;canvas.height=img.height*scale;canvas.getContext('2d')!.drawImage(img,0,0,canvas.width,canvas.height);URL.revokeObjectURL(url);const blob=await new Promise<Blob|null>(ok=>canvas.toBlob(ok,'image/jpeg',.82));if(blob)await attach(blob);else throw new Error();}catch{setError('Não foi possível abrir a foto. Use JPEG ou PNG, ou registre por texto.');}}
- async function record(){setError('');if(recording){recorder.current?.stop();return;}try{const s=await navigator.mediaDevices.getUserMedia({audio:true});stream.current=s;const m=new MediaRecorder(s);recorder.current=m;const chunks:BlobPart[]=[];m.ondataavailable=e=>chunks.push(e.data);m.onstop=()=>{s.getTracks().forEach(t=>t.stop());if(timer.current)clearTimeout(timer.current);if(mounted.current){setRecording(false);void attach(new Blob(chunks,{type:m.mimeType}));}};m.start();setRecording(true);timer.current=setTimeout(()=>{if(m.state==='recording')m.stop();},60000);}catch{setError('Microfone indisponível. Autorize o acesso no navegador ou use texto.');}}
  async function analyze(){setBusy(true);setError('');try{if(!consent)throw new Error('Ative o consentimento de IA em Perfil para enviar sua refeição.');if(!text.trim()&&!media)throw new Error('Adicione uma descrição, foto ou áudio.');const result=await estimateMeal({text,media:media?{data:media.data,mimeType:media.mimeType}:undefined});setItems(result.items);setQuestions(result.questions);setNotes(result.notes);if(mode==='audio'&&result.description)setText(result.description);if(!result.items.length)setError('Precisamos de mais detalhes para associar os alimentos.');}catch(e){setError(e instanceof Error?e.message:'Não foi possível analisar.');}finally{setBusy(false);}}
  function save(){if(!items.length){setError('Adicione pelo menos um alimento.');return;}if(!entryDate||!time){setError('Informe data e horário.');return;}onSave({id:existing?.id??uid(),date:entryDate,time,name,items,method:mode,notes:text,updatedAt:new Date().toISOString()});onClose();}
  const min=items.reduce((s,i)=>s+i.kcal*(i.estimated?(i.minGrams??i.grams)/i.grams:1),0), max=items.reduce((s,i)=>s+i.kcal*(i.estimated?(i.maxGrams??i.grams)/i.grams:1),0);
- return <Modal title={existing?'Editar refeição':'O que você comeu?'} subtitle="Do seu jeito. Nós cuidamos das contas." onClose={onClose} wide><div className="modal-body"><div className="capture-tabs">{([{id:'manual',label:'Alimentos',icon:Search},{id:'foto',label:'Foto',icon:Camera},{id:'texto',label:'Texto',icon:Type},{id:'audio',label:'Áudio',icon:Mic}] as const).map(t=><button key={t.id} className={mode===t.id?'selected':''} onClick={()=>{setMode(t.id);setError('');}}><t.icon size={19}/>{t.label}</button>)}</div><div className="form-row"><label>Refeição<select value={name} onChange={e=>setName(e.target.value)}>{['Café da manhã','Almoço','Lanche','Jantar','Ceia','Outra refeição'].map(n=><option key={n}>{n}</option>)}</select></label><label>Data<input type="date" value={entryDate} onChange={e=>setEntryDate(e.target.value)}/></label><label>Horário<input type="time" value={time} onChange={e=>setTime(e.target.value)}/></label></div>
- {mode==='manual'?<><label className="search-box"><Search size={17}/><input placeholder="Buscar alimento no catálogo…" value={search} onChange={e=>setSearch(e.target.value)}/></label><div className="food-picker"><select aria-label="Alimento" value={foodId} onChange={e=>setFoodId(e.target.value)}>{filtered.map(f=><option key={f.id} value={f.id}>{f.name}</option>)}</select><label className="quantity"><input aria-label="Quantidade em gramas" type="number" min="1" max="10000" value={grams} onChange={e=>setGrams(Number(e.target.value))}/><span>g</span></label><button className="button primary" disabled={!filtered.length||grams<=0||grams>10000} onClick={()=>{const f=filtered.find(f=>f.id===foodId)??filtered[0];if(f)setItems([...items,ingredient(f,grams)]);}}><Plus size={17}/>Adicionar</button></div><button className="text-button" onClick={()=>setCustom(!custom)}>{custom?'Fechar cadastro':'Não encontrou? Informar rótulo ou alimento'}</button>{custom&&<form className="custom-food" onSubmit={e=>{e.preventDefault();const f=new FormData(e.currentTarget);setItems([...items,{foodId:uid(),name:String(f.get('food')),grams:Number(f.get('weight')),kcal:Number(f.get('kcal')),protein:Number(f.get('protein')),carbs:Number(f.get('carbs')),fat:Number(f.get('fat')),source:'Informado pelo usuário · valores da porção',estimated:false}]);setCustom(false);}}><p>Informe os nutrientes da porção inteira consumida.</p><label>Alimento<input name="food" required maxLength={100}/></label><div className="form-row">{[['weight','Porção (g)'],['kcal','kcal'],['protein','Proteína (g)'],['carbs','Carboidratos (g)'],['fat','Gorduras (g)']].map(([key,label])=><label key={key}>{label}<input name={key} type="number" step="0.1" min={key==='weight'?0.1:0} max="10000" required/></label>)}</div><button className="button secondary" type="submit">Adicionar porção</button></form>}</>:<div className="ai-capture">{mode==='foto'&&<label className="photo-drop">{media?.preview&&media.mimeType.startsWith('image/')?<img src={media.preview} alt="Refeição para análise"/>:<><Camera size={30}/><strong>Fotografe sua refeição</strong><span>Ou escolha uma imagem da galeria</span></>}<input aria-label="Selecionar foto da refeição" type="file" accept="image/*" onChange={e=>e.target.files?.[0]&&void photo(e.target.files[0])}/></label>}{mode==='audio'&&<div className="audio-capture"><button className={`record-button ${recording?'recording':''}`} onClick={()=>void record()} aria-label={recording?'Parar gravação':'Gravar refeição'}>{recording?<Square size={23}/>:<Mic size={27}/>}</button><strong>{recording?'Ouvindo… toque para encerrar':'Conte o que você comeu'}</strong><span>Até 60 segundos · transcrição revisável</span>{media?.mimeType.startsWith('audio/')&&<audio controls src={media.preview}/>}</div>}<label>{mode==='audio'?'Transcrição / detalhes adicionais':'Descreva a refeição'}<textarea value={text} onChange={e=>setText(e.target.value)} placeholder="120 g de arroz cozido, 180 g de frango grelhado e uma colher de azeite…" rows={3}/></label><p className="muted small">Análise multimodal via Google Gemini 2.5 Flash conectada.</p><button className="button primary" disabled={!getAiStatus().gemini||busy||recording} onClick={()=>void analyze()}>{busy?<Loader2 className="spin" size={17}/>:<Sparkles size={17}/>} {busy?'Analisando com Gemini…':'Estimar com Gemini (IA)'}</button></div>}
+ return <Modal title={existing?'Editar refeição':'O que você comeu?'} subtitle="Do seu jeito. Nós cuidamos das contas." onClose={onClose} wide><div className="modal-body"><div className="capture-tabs">{([{id:'manual',label:'Alimentos',icon:Search},{id:'foto',label:'Foto',icon:Camera},{id:'texto',label:'Texto',icon:Type},{id:'audio',label:'Áudio',icon:Mic}] as const).map(t=><button key={t.id} className={mode===t.id?'selected':''} onClick={()=>{setMode(t.id);setMedia(undefined);setError('');}}><t.icon size={19}/>{t.label}</button>)}</div><div className="form-row"><label>Refeição<select value={name} onChange={e=>setName(e.target.value)}>{['Café da manhã','Almoço','Lanche','Jantar','Ceia','Outra refeição'].map(n=><option key={n}>{n}</option>)}</select></label><label>Data<input type="date" value={entryDate} onChange={e=>setEntryDate(e.target.value)}/></label><label>Horário<input type="time" value={time} onChange={e=>setTime(e.target.value)}/></label></div>
+ {mode==='manual'?<><label className="search-box"><Search size={17}/><input placeholder="Buscar alimento no catálogo…" value={search} onChange={e=>setSearch(e.target.value)}/></label><div className="food-picker"><select aria-label="Alimento" value={foodId} onChange={e=>setFoodId(e.target.value)}>{filtered.map(f=><option key={f.id} value={f.id}>{f.name}</option>)}</select><label className="quantity"><input aria-label="Quantidade em gramas" type="number" min="1" max="10000" value={grams} onChange={e=>setGrams(Number(e.target.value))}/><span>g</span></label><button className="button primary" disabled={!filtered.length||grams<=0||grams>10000} onClick={()=>{const f=filtered.find(f=>f.id===foodId)??filtered[0];if(f)setItems([...items,ingredient(f,grams)]);}}><Plus size={17}/>Adicionar</button></div><button className="text-button" onClick={()=>setCustom(!custom)}>{custom?'Fechar cadastro':'Não encontrou? Informar rótulo ou alimento'}</button>{custom&&<form className="custom-food" onSubmit={e=>{e.preventDefault();const f=new FormData(e.currentTarget);setItems([...items,{foodId:uid(),name:String(f.get('food')),grams:Number(f.get('weight')),kcal:Number(f.get('kcal')),protein:Number(f.get('protein')),carbs:Number(f.get('carbs')),fat:Number(f.get('fat')),source:'Informado pelo usuário · valores da porção',estimated:false}]);setCustom(false);}}><p>Informe os nutrientes da porção inteira consumida.</p><label>Alimento<input name="food" required maxLength={100}/></label><div className="form-row">{[['weight','Porção (g)'],['kcal','kcal'],['protein','Proteína (g)'],['carbs','Carboidratos (g)'],['fat','Gorduras (g)']].map(([key,label])=><label key={key}>{label}<input name={key} type="number" step="0.1" min={key==='weight'?0.1:0} max="10000" required/></label>)}</div><button className="button secondary" type="submit">Adicionar porção</button></form>}</>:<div className="ai-capture">{mode==='foto'&&<label className="photo-drop">{media?.preview&&media.mimeType.startsWith('image/')?<img src={media.preview} alt="Refeição para análise"/>:<><Camera size={30}/><strong>Fotografe sua refeição</strong><span>Ou escolha uma imagem da galeria</span></>}<input aria-label="Selecionar foto da refeição" type="file" accept="image/*" onChange={e=>e.target.files?.[0]&&void photo(e.target.files[0])}/></label>}{mode==='audio'&&<div className="audio-capture"><Mic size={27}/><strong>Use o ditado do teclado do iPhone</strong><span>Toque no campo abaixo e no microfone do teclado. Revise o texto antes de enviar. Áudio gravado não é enviado a outro provedor.</span></div>}<label>{mode==='audio'?'Transcrição / detalhes adicionais':'Descreva a refeição'}<textarea value={text} onChange={e=>setText(e.target.value)} placeholder="120 g de arroz cozido, 180 g de frango grelhado e uma colher de azeite…" rows={3}/></label><p className="muted small">Texto e imagens: somente DeepSeek Flash. Para falar, use o ditado do teclado.</p><button className="button primary" disabled={!getAiStatus().ready||busy||recording} onClick={()=>void analyze()}>{busy?<Loader2 className="spin" size={17}/>:<Sparkles size={17}/>} {busy?'Analisando…':'Estimar com IA'}</button></div>}
  {questions.length>0&&<div className="notice">{questions.map(q=><p key={q}>{q}</p>)}<span>Adicione a resposta à descrição e analise novamente, ou revise as porções abaixo.</span></div>}{notes&&<p className="muted small">{notes}</p>}
  {items.length>0&&<div className="meal-review"><h3>Confira sua refeição</h3>{items.map((i,index)=><div className="ingredient-row" key={`${i.foodId}-${index}`}><div><strong>{i.name}</strong><span>{i.source}{i.estimated?' · porção estimada':''}</span></div><label className="quantity"><input aria-label={`Gramas de ${i.name}`} type="number" min="1" value={i.grams} onChange={e=>{const amount=Number(e.target.value);if(amount<=0||amount>10000)return;setItems(items.map((item,j)=>j!==index?item:{...item,grams:amount,kcal:item.kcal/item.grams*amount,protein:item.protein/item.grams*amount,carbs:item.carbs/item.grams*amount,fat:item.fat/item.grams*amount,estimated:false,minGrams:undefined,maxGrams:undefined}));}}/><span>g</span></label><span>{number(i.kcal)} kcal</span><button className="icon-button" aria-label={`Remover ${i.name}`} onClick={()=>setItems(items.filter((_,j)=>j!==index))}><Trash2 size={16}/></button></div>)}<div className="review-totals"><strong>{number(totals.kcal)} <small>kcal</small></strong><span>P <b>{number(totals.protein)} g</b></span><span>C <b>{number(totals.carbs)} g</b></span><span>G <b>{number(totals.fat)} g</b></span></div>{items.some(i=>i.estimated)&&<p className="small muted">Faixa plausível: {number(min)}–{number(max)} kcal. Estimativas permanecem identificadas no diário.</p>}</div>}
  {error&&<div className="error" role="alert">{error}</div>}</div><footer className="modal-footer"><span className="muted small">{items.length} alimento{items.length===1?'':'s'}</span><button className="button primary" onClick={save} disabled={!items.length||busy}><Check size={17}/>Salvar refeição</button></footer></Modal>;
 }
 
 export { ExerciseForm };
-export function PlanModal({existing,onSave,onClose}:{existing?:Plan;onSave:(p:Plan)=>void;onClose:()=>void}){const [name,setName]=useState(existing?.name??'');const [editing,setEditing]=useState<Exercise>();const [exercises,setExercises]=useState<Exercise[]>(existing?.exercises??[]);const [days,setDays]=useState<number[]>(existing?.days??[]);const [origin,setOrigin]=useState<Origin>(existing?.origin??'personal');return <Modal title={existing?'Revisar plano':'Criar plano de treino'} subtitle="O plano-base fica separado das adaptações de cada sessão." onClose={onClose} wide><div className="modal-body"><label>Nome do plano<input value={name} onChange={e=>setName(e.target.value)} placeholder="Treino A · Membros inferiores" maxLength={100}/></label><label>Autoria<select value={origin} onChange={e=>setOrigin(e.target.value as Origin)}><option value="personal">Personal trainer</option><option value="usuario">Meu plano</option></select></label><label>Dias da semana</label><div className="day-toggles">{['D','S','T','Q','Q','S','S'].map((l,i)=><button key={i} className={days.includes(i)?'selected':''} aria-label={['Domingo','Segunda','Terça','Quarta','Quinta','Sexta','Sábado'][i]} onClick={()=>setDays(days.includes(i)?days.filter(d=>d!==i):[...days,i])}>{l}</button>)}</div><div className="plan-ex-list">{exercises.map((ex,i)=><div key={ex.id}><span>{i+1}</span><strong>{ex.name}{ex.supersetId&&<small>Bi-set · dupla</small>}<small>{ex.sets} × {ex.reps} · {ex.load} kg · {ex.rest}s</small></strong><Badge origin={ex.origin}/><button className="button secondary" aria-label={`Ajustar ${ex.name}`} onClick={()=>setEditing(ex)}>Ajustar</button><button className="icon-button" aria-label={`Remover ${ex.name}`} onClick={()=>setExercises(exercises.filter(e=>e.id!==ex.id).map(e=>{if(ex.supersetId&&e.supersetId===ex.supersetId){const copy={...e};delete copy.supersetId;return copy;}return e;}))}><Trash2 size={16}/></button></div>)}</div>{editing&&<PlanExerciseSettings key={editing.id} exercise={editing} onCancel={()=>setEditing(undefined)} onSave={value=>{setExercises(previous=>previous.map(ex=>ex.id===value.id?value:value.supersetId&&ex.supersetId===value.supersetId?{...ex,sets:value.sets,rest:value.rest}:ex));setEditing(undefined);}}/>}<h3>Adicionar exercício ao plano</h3><ExerciseForm defaultOrigin={origin} onAdd={ex=>setExercises(previous=>[...previous,ex])} onAddMany={items=>setExercises(previous=>[...previous,...items])}/></div><footer className="modal-footer"><span className="small muted">{existing?`Nova versão ${existing.version+1}`:'Versão 1'} · {exercises.length} exercícios</span><button className="button primary" disabled={!name.trim()||!exercises.length} onClick={()=>{onSave({id:existing?.id??uid(),name,subtitle:[...new Set(exercises.map(e=>e.muscle))].join(', '),days,origin,version:(existing?.version??0)+1,exercises});onClose();}}><Check size={17}/>Salvar plano</button></footer></Modal>;}
+export function PlanModal({
+  existing,
+  onSave,
+  onClose,
+}: {
+  existing?: Plan;
+  onSave: (p: Plan) => void;
+  onClose: () => void;
+}) {
+  const [name, setName] = useState(existing?.name ?? '');
+  const [editing, setEditing] = useState<Exercise>();
+  const [exercises, setExercises] = useState<Exercise[]>(existing?.exercises ?? []);
+  const [days, setDays] = useState<number[]>(existing?.days ?? []);
+  const [origin, setOrigin] = useState<Origin>(existing?.origin ?? 'personal');
+  const [draggedUnitIndex, setDraggedUnitIndex] = useState<number | null>(null);
+  const [dragOverUnitIndex, setDragOverUnitIndex] = useState<number | null>(null);
+
+  // Group exercises into atomic units: standalone or bi-set
+  const units = useMemo(() => {
+    const list: { id: string; supersetId?: string; exercises: Exercise[]; startIndex: number }[] = [];
+    const seen = new Set<string>();
+
+    for (let i = 0; i < exercises.length; i++) {
+      const ex = exercises[i];
+      if (!ex.supersetId) {
+        list.push({ id: ex.id, exercises: [ex], startIndex: i });
+      } else if (!seen.has(ex.supersetId)) {
+        seen.add(ex.supersetId);
+        const group = exercises.filter(item => item.supersetId === ex.supersetId);
+        list.push({
+          id: ex.supersetId,
+          supersetId: ex.supersetId,
+          exercises: group,
+          startIndex: i,
+        });
+      }
+    }
+    return list;
+  }, [exercises]);
+
+  const moveUnit = (fromIdx: number, toIdx: number) => {
+    setExercises(prev => reorderPlanUnits(prev, fromIdx, toIdx));
+  };
+
+  const removeExercise = (target: Exercise) => {
+    setExercises(exercises.filter(e => e.id !== target.id).map(e => {
+      if (target.supersetId && e.supersetId === target.supersetId) {
+        const copy = { ...e };
+        delete copy.supersetId;
+        return copy;
+      }
+      return e;
+    }));
+  };
+
+  const inlineEditor = (exercise: Exercise) => editing?.id === exercise.id ? (
+    <div className="plan-inline-editor" role="region" aria-label={`Ajuste de ${exercise.name}`}>
+      <PlanExerciseSettings
+        key={exercise.id}
+        exercise={exercise}
+        planExercises={exercises}
+        onCancel={() => setEditing(undefined)}
+        onSave={updatedList => {
+          setExercises(updatedList);
+          setEditing(undefined);
+        }}
+      />
+    </div>
+  ) : null;
+
+  return (
+    <Modal
+      title={existing ? 'Revisar plano' : 'Criar plano de treino'}
+      subtitle="O plano-base fica separado das adaptações de cada sessão."
+      onClose={onClose}
+      wide
+      className="plan-editor-modal"
+    >
+      <div className="modal-body">
+        <label>
+          Nome do plano
+          <input
+            value={name}
+            onChange={e => setName(e.target.value)}
+            placeholder="Treino A · Membros inferiores"
+            maxLength={100}
+          />
+        </label>
+        <label>
+          Autoria
+          <select value={origin} onChange={e => setOrigin(e.target.value as Origin)}>
+            <option value="personal">Personal trainer</option>
+            <option value="usuario">Meu plano</option>
+          </select>
+        </label>
+        <label>Dias da semana</label>
+        <div className="day-toggles">
+          {['D', 'S', 'T', 'Q', 'Q', 'S', 'S'].map((l, i) => (
+            <button
+              key={i}
+              className={days.includes(i) ? 'selected' : ''}
+              aria-label={['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'][i]}
+              onClick={() => setDays(days.includes(i) ? days.filter(d => d !== i) : [...days, i])}
+            >
+              {l}
+            </button>
+          ))}
+        </div>
+
+        <div className="plan-ex-list-header">
+          <strong>Exercícios do plano ({exercises.length})</strong>
+          <small className="muted">Use ▲ / ▼ para navegar ou arraste pelo ícone ⋮⋮</small>
+        </div>
+
+        <div className="plan-ex-list">
+          {units.map((unit, unitIdx) => {
+            const isDragging = draggedUnitIndex === unitIdx;
+            const isDragOver = dragOverUnitIndex === unitIdx;
+
+            if (!unit.supersetId) {
+              const ex = unit.exercises[0];
+              return (
+                <Fragment key={ex.id}>
+                <div
+                  key={ex.id}
+                  className={`plan-ex-row ${isDragging ? 'is-dragging' : ''} ${isDragOver ? 'drag-over' : ''}`}
+                  data-unit-index={unitIdx}
+                  onDragOver={e => {
+                    e.preventDefault();
+                    if (draggedUnitIndex !== null && draggedUnitIndex !== unitIdx) setDragOverUnitIndex(unitIdx);
+                  }}
+                  onDragLeave={() => { if (dragOverUnitIndex === unitIdx) setDragOverUnitIndex(null); }}
+                  onDrop={e => {
+                    e.preventDefault();
+                    const from = Number(e.dataTransfer.getData('text/plain'));
+                    if (!isNaN(from) && from !== unitIdx) moveUnit(from, unitIdx);
+                    setDraggedUnitIndex(null);
+                    setDragOverUnitIndex(null);
+                  }}
+                  onDragEnd={() => { setDraggedUnitIndex(null); setDragOverUnitIndex(null); }}
+                >
+                  <div className="exercise-order-controls">
+                    <div
+                      className="exercise-drag-handle"
+                      title="Arrastar para reordenar"
+                      draggable
+                      onDragStart={e => {
+                        e.dataTransfer.setData('text/plain', String(unitIdx));
+                        setDraggedUnitIndex(unitIdx);
+                      }}
+                      onPointerDown={e => {
+                        if (e.pointerType === 'mouse' && e.button !== 0) return;
+                        try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch {}
+                        setDraggedUnitIndex(unitIdx);
+                      }}
+                      onPointerMove={e => {
+                        if (draggedUnitIndex === null) return;
+                        const elem = document.elementFromPoint(e.clientX, e.clientY);
+                        const target = elem?.closest('[data-unit-index]') as HTMLElement | null;
+                        if (target && target.dataset.unitIndex !== undefined) {
+                          const over = Number(target.dataset.unitIndex);
+                          if (!isNaN(over) && over !== draggedUnitIndex) setDragOverUnitIndex(over);
+                        }
+                      }}
+                      onPointerUp={e => {
+                        try { (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId); } catch {}
+                        if (draggedUnitIndex !== null && dragOverUnitIndex !== null && dragOverUnitIndex !== draggedUnitIndex) {
+                          moveUnit(draggedUnitIndex, dragOverUnitIndex);
+                        }
+                        setDraggedUnitIndex(null);
+                        setDragOverUnitIndex(null);
+                      }}
+                      onPointerCancel={() => { setDraggedUnitIndex(null); setDragOverUnitIndex(null); }}
+                    >
+                      <GripVertical size={16} />
+                    </div>
+                    <div className="order-buttons-col">
+                      <button
+                        type="button"
+                        className="exercise-order-btn"
+                        title="Mover para cima"
+                        disabled={unitIdx === 0}
+                        onClick={() => moveUnit(unitIdx, unitIdx - 1)}
+                        aria-label={`Mover ${ex.name} para cima`}
+                      >
+                        <ChevronUp size={16} />
+                      </button>
+                      <button
+                        type="button"
+                        className="exercise-order-btn"
+                        title="Mover para baixo"
+                        disabled={unitIdx >= units.length - 1}
+                        onClick={() => moveUnit(unitIdx, unitIdx + 1)}
+                        aria-label={`Mover ${ex.name} para baixo`}
+                      >
+                        <ChevronDown size={16} />
+                      </button>
+                    </div>
+                    <span className="exercise-index">{String(unit.startIndex + 1).padStart(2, '0')}</span>
+                  </div>
+
+                  <strong style={{ flex: 1, minWidth: 0 }}>
+                    {ex.name}
+                    <small>{ex.sets} × {ex.reps} · {ex.load} kg · {ex.rest}s · {ex.muscle}</small>
+                  </strong>
+
+                  <Badge origin={ex.origin} />
+                  <button className="button secondary" aria-label={`Ajustar ${ex.name}`} aria-expanded={editing?.id === ex.id} onClick={() => setEditing(editing?.id === ex.id ? undefined : ex)}>Ajustar</button>
+                  <button className="icon-button" aria-label={`Remover ${ex.name}`} onClick={() => removeExercise(ex)}><Trash2 size={16} /></button>
+                </div>
+                {inlineEditor(ex)}
+                </Fragment>
+              );
+            }
+
+            // Bi-set group (preserves pair together)
+            return (
+              <div
+                key={unit.id}
+                className={`plan-superset-card ${isDragging ? 'is-dragging' : ''} ${isDragOver ? 'drag-over' : ''}`}
+                data-unit-index={unitIdx}
+                onDragOver={e => {
+                  e.preventDefault();
+                  if (draggedUnitIndex !== null && draggedUnitIndex !== unitIdx) setDragOverUnitIndex(unitIdx);
+                }}
+                onDragLeave={() => { if (dragOverUnitIndex === unitIdx) setDragOverUnitIndex(null); }}
+                onDrop={e => {
+                  e.preventDefault();
+                  const from = Number(e.dataTransfer.getData('text/plain'));
+                  if (!isNaN(from) && from !== unitIdx) moveUnit(from, unitIdx);
+                  setDraggedUnitIndex(null);
+                  setDragOverUnitIndex(null);
+                }}
+                onDragEnd={() => { setDraggedUnitIndex(null); setDragOverUnitIndex(null); }}
+              >
+                <div className="plan-superset-bar">
+                  <div className="exercise-order-controls">
+                    <div
+                      className="exercise-drag-handle"
+                      title="Arrastar bi-set para reordenar"
+                      draggable
+                      onDragStart={e => {
+                        e.dataTransfer.setData('text/plain', String(unitIdx));
+                        setDraggedUnitIndex(unitIdx);
+                      }}
+                      onPointerDown={e => {
+                        if (e.pointerType === 'mouse' && e.button !== 0) return;
+                        try { (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId); } catch {}
+                        setDraggedUnitIndex(unitIdx);
+                      }}
+                      onPointerMove={e => {
+                        if (draggedUnitIndex === null) return;
+                        const elem = document.elementFromPoint(e.clientX, e.clientY);
+                        const target = elem?.closest('[data-unit-index]') as HTMLElement | null;
+                        if (target && target.dataset.unitIndex !== undefined) {
+                          const over = Number(target.dataset.unitIndex);
+                          if (!isNaN(over) && over !== draggedUnitIndex) setDragOverUnitIndex(over);
+                        }
+                      }}
+                      onPointerUp={e => {
+                        try { (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId); } catch {}
+                        if (draggedUnitIndex !== null && dragOverUnitIndex !== null && dragOverUnitIndex !== draggedUnitIndex) {
+                          moveUnit(draggedUnitIndex, dragOverUnitIndex);
+                        }
+                        setDraggedUnitIndex(null);
+                        setDragOverUnitIndex(null);
+                      }}
+                      onPointerCancel={() => { setDraggedUnitIndex(null); setDragOverUnitIndex(null); }}
+                    >
+                      <GripVertical size={16} />
+                    </div>
+                    <div className="order-buttons-col">
+                      <button
+                        type="button"
+                        className="exercise-order-btn"
+                        title="Mover bi-set para cima"
+                        disabled={unitIdx === 0}
+                        onClick={() => moveUnit(unitIdx, unitIdx - 1)}
+                        aria-label="Mover bi-set para cima"
+                      >
+                        <ChevronUp size={16} />
+                      </button>
+                      <button
+                        type="button"
+                        className="exercise-order-btn"
+                        title="Mover bi-set para baixo"
+                        disabled={unitIdx >= units.length - 1}
+                        onClick={() => moveUnit(unitIdx, unitIdx + 1)}
+                        aria-label="Mover bi-set para baixo"
+                      >
+                        <ChevronDown size={16} />
+                      </button>
+                    </div>
+                    <span className="eyebrow" style={{ margin: 0, color: '#315f48', fontWeight: 700 }}>BI-SET · DUPLA</span>
+                  </div>
+                  {unit.exercises.length >= 2 && (
+                    <button
+                      type="button"
+                      className="text-button"
+                      style={{ fontSize: 11, padding: 0, gap: 4 }}
+                      onClick={() => setExercises(prev => swapPlanBiSetExercises(prev, unit.supersetId!))}
+                      title="Inverter quem começa a dupla"
+                    >
+                      <RefreshCw size={11} />
+                      <span>Inverter ordem</span>
+                    </button>
+                  )}
+                </div>
+
+                <div className="plan-superset-items">
+                  {unit.exercises.map((ex, exOffset) => (
+                    <Fragment key={ex.id}>
+                    <div className="plan-ex-row-sub">
+                      <span className="exercise-index">{String(unit.startIndex + exOffset + 1).padStart(2, '0')}</span>
+                      <strong style={{ flex: 1, minWidth: 0 }}>
+                        {ex.name}
+                        <small>{ex.sets} × {ex.reps} · {ex.load} kg · {ex.rest}s · {ex.muscle}</small>
+                      </strong>
+                      <Badge origin={ex.origin} />
+                      <button className="button secondary" aria-label={`Ajustar ${ex.name}`} aria-expanded={editing?.id === ex.id} onClick={() => setEditing(editing?.id === ex.id ? undefined : ex)}>Ajustar</button>
+                      <button className="icon-button" aria-label={`Remover ${ex.name}`} onClick={() => removeExercise(ex)}><Trash2 size={16} /></button>
+                    </div>
+                    {inlineEditor(ex)}
+                    </Fragment>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        <h3>Adicionar exercício ao plano</h3>
+        <ExerciseForm
+          defaultOrigin={origin}
+          onAdd={ex => setExercises(previous => [...previous, ex])}
+          onAddMany={items => setExercises(previous => [...previous, ...items])}
+        />
+      </div>
+
+      <footer className="modal-footer">
+        <span className="small muted">
+          {existing ? `Nova versão ${existing.version + 1}` : 'Versão 1'} · {exercises.length} exercícios
+        </span>
+        <button
+          className="button primary"
+          disabled={!name.trim() || !exercises.length}
+          onClick={() => {
+            onSave({
+              id: existing?.id ?? uid(),
+              name,
+              subtitle: [...new Set(exercises.map(e => e.muscle))].join(', '),
+              days,
+              origin,
+              version: (existing?.version ?? 0) + 1,
+              exercises,
+            });
+            onClose();
+          }}
+        >
+          <Check size={17} />
+          Salvar plano
+        </button>
+      </footer>
+    </Modal>
+  );
+}
+
 export function TextLink({children,onClick}:{children:ReactNode;onClick:()=>void}){return <button className="text-button" onClick={onClick}>{children}<ArrowUpRight size={15}/></button>;}

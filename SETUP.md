@@ -6,7 +6,7 @@ O aplicativo Web está configurado localmente para `ai-gym-and-diet-manager`. `.
 
 1. Abra https://console.firebase.google.com/project/ai-gym-and-diet-manager/overview.
 2. Em Authentication → Sign-in method, habilite E-mail/senha.
-3. Em Authentication → Settings → Authorized domains, autorize `127.0.0.1` e `localhost` para o desenvolvimento e, ao publicar, o domínio GitHub Pages utilizado pelo app.
+3. Em Authentication → Settings → Authorized domains, autorize `127.0.0.1` e `localhost` para o desenvolvimento e o domínio publicado `ai-gym-and-diet-manager.web.app`.
 4. Em Firestore Database, crie o banco `(default)` no modo de produção. A região preferida é `southamerica-east1`, se disponível. Não troque um banco já criado sem avaliar a migração.
 5. Na aba Rules do Firestore, publique o conteúdo de `firestore.rules`. Ele permite acesso aos registros apenas pelo usuário autenticado proprietário e nega outros caminhos. Se já houver regras usadas por outro aplicativo, preserve-as e adicione somente o caminho necessário.
 6. Na prévia local, abra Perfil → Conectar conta → Criar minha conta. Faça pessoalmente o cadastro/senha. Dados de demonstração ficam separados da conta real.
@@ -23,8 +23,22 @@ Configurar o aplicativo Web não publica regras, não habilita E-mail/senha e n�
 
 ## Serviços de IA e publicação
 
-As Cloud Functions `estimateMeal` e `dailyCoach` ainda precisam ser implementadas e publicadas. As chaves Gemini, Jev, OpenAI e USDA serão armazenadas como segredos do backend, nunca em variáveis `VITE_`. O projeto precisa de Blaze para publicar as Functions. O OCR de bioimpedância funciona localmente sem esses serviços.
+O PWA publicado usa a função autenticada `proxyAi` em `southamerica-east1`. Ela verifica conta, consentimento e cota antes de chamar somente `deepseek-flash`. A chave `DEEPSEEK_API_KEY` fica no Secret Manager, nunca no navegador. Chat, estimativas por imagem/texto, leitura de exames e propostas usam esse mesmo gateway. Mudanças propostas pelo chat precisam de confirmação do usuário.
 
-GitHub Pages precisa receber as variáveis públicas Firebase no processo de build. `.env.local` não será enviado ao repositório. O workflow de publicação ainda precisa ser preparado.
+Firebase Hosting serve o PWA em https://ai-gym-and-diet-manager.web.app/. Square Cloud, WhatsApp, Siri/webhooks e processos/agendadores de bot não fazem parte da arquitetura ativa. O código e o snapshot do bot foram preservados somente no arquivo privado local `.archive/whatsapp-retired-2026-10-19/`, ignorado pelo Git.
+
+### Desenvolvimento e publicação
+
+1. Configure somente os dados públicos Firebase em `.env.local` e ative `VITE_AI_BACKEND_ENABLED=true` para o build publicado.
+2. Para testar IA localmente, coloque `DEEPSEEK_API_KEY` no arquivo ignorado `.env.deepseek`; o Vite usa um proxy Node autenticado, sem expor a chave no bundle.
+3. Execute `npm run dev -- --port 5174 --strictPort`.
+4. Valide com `npm test` e `npm run build`.
+5. Publique com `firebase deploy --only functions:ritmo-ai,hosting --project ai-gym-and-diet-manager`. Nunca inclua arquivos de chaves ou backups privados no deploy.
+
+### Custos e disponibilidade
+
+Não há servidor de bot nem plano de hospedagem Square necessário ao app. A função fica com zero instâncias mínimas e só chama DeepSeek quando o usuário solicita IA; não existem chamadas periódicas pagas. O projeto precisa do plano Firebase Blaze para Cloud Functions: cobrança por uso, com cotas gratuitas, não garantia de custo zero. DeepSeek também cobra pelo consumo da API/saldo disponível. Consulte https://firebase.google.com/pricing e o painel DeepSeek; configure alertas no faturamento Google Cloud. As cotas de IA (100/dia e 20/minuto por usuário) reduzem abuso, mas não são um teto monetário global.
+
+Registros manuais, planos, timers, relatórios e dados sincronizados não dependem de créditos DeepSeek. Sem internet/saldo, o chat deve informar a indisponibilidade sem inventar respostas nem modificar registros. Fotos devem ser JPEG/PNG/WebP; para voz, use o ditado do teclado, pois áudio gravado não é enviado a outros provedores.
 
 Documentação oficial: https://firebase.google.com/docs/web/setup, https://firebase.google.com/docs/auth/web/password-auth, https://firebase.google.com/docs/firestore/security/get-started.

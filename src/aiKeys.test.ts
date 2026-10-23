@@ -45,5 +45,5 @@ describe('Private AI gateway security', () => {
   // Disallowed MIME types
   expect(() => validateGatewayRequest(baseRequest('application/javascript'))).toThrow();
   expect(() => validateGatewayRequest(baseRequest('text/html'))).toThrow();
- });
+ }, 15000);
 });

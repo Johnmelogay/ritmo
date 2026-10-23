@@ -2,39 +2,215 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { collection, doc, getDocsFromServer, onSnapshot, writeBatch } from 'firebase/firestore';
 import { db } from './firebase';
 import { useIdentity } from './Identity';
-import { type AppState, emptyAiMemory, emptyState, stateSchema } from './domain';
+import {
+  type AppState,
+  type AiMemory,
+  emptyAiMemory,
+  emptyState,
+  stateSchema,
+  defaultProfile,
+  mealSchema,
+  planSchema,
+  sessionSchema,
+  bodySchema,
+  recoverySchema
+} from './domain';
 import { readStoredState, writeStoredState } from './storage';
 import { mergeBackup } from './migration';
 
-type RecordValue={kind:string;payload:unknown;updatedAt:string};
-function records(state:AppState):Record<string,RecordValue>{
- const result:Record<string,RecordValue>={};const add=(id:string,kind:string,payload:unknown)=>{result[id]={kind,payload,updatedAt:''};};
- add('profile','profile',state.profile);add('meta','meta',{ownerUid:state.ownerUid,water:state.water,reviewed:state.reviewed,dismissed:state.dismissed,routineCorrections:state.routineCorrections,trash:state.trash,chat:state.chat,aiMemory:state.aiMemory});
- for(const kind of ['meals','plans','sessions','body','recovery'] as const)for(const item of state[kind])add(`${kind}_${item.id}`,kind,item);
- return result;
+type RecordValue = { kind: string; payload: unknown; updatedAt: string };
+
+function sanitizeMemory(mem: any): AiMemory {
+  if (!mem || typeof mem !== 'object') return emptyAiMemory();
+  const facts = (Array.isArray(mem.facts) ? mem.facts : [])
+    .map((f: any, idx: number) => {
+      if (typeof f === 'string') {
+        return { id: `fact_${Date.now()}_${idx}`, text: f.slice(0, 200), createdAt: new Date().toISOString() };
+      }
+      if (typeof f === 'object' && f !== null) {
+        return {
+          id: String(f.id || `fact_${Date.now()}_${idx}`),
+          text: String(f.text || '').slice(0, 200),
+          createdAt: String(f.createdAt || new Date().toISOString())
+        };
+      }
+      return null;
+    })
+    .filter((f: any) => f && f.text)
+    .slice(0, 20);
+
+  const history = (Array.isArray(mem.history) ? mem.history : [])
+    .map((h: any) => {
+      if (typeof h === 'object' && h !== null && h.date && h.note) {
+        return { date: String(h.date), note: String(h.note).slice(0, 800) };
+      }
+      return null;
+    })
+    .filter((h: any) => h !== null)
+    .slice(0, 14);
+
+  return {
+    day: String(mem.day || ''),
+    dailyNote: String(mem.dailyNote || '').slice(0, 1500),
+    history,
+    facts,
+    updatedAt: String(mem.updatedAt || new Date().toISOString())
+  };
 }
-function restore(items:RecordValue[],ownerUid:string):AppState{
- const next=emptyState();for(const item of items){if(item.kind==='profile')next.profile=item.payload as AppState['profile'];else if(item.kind==='meta')Object.assign(next,item.payload);else if(['meals','plans','sessions','body','recovery'].includes(item.kind))(next[item.kind as 'meals'] as unknown[]).push(item.payload);}
- return stateSchema.parse({...next,ownerUid,demo:false});
+
+function records(state: AppState): Record<string, RecordValue> {
+  const result: Record<string, RecordValue> = {};
+  const add = (id: string, kind: string, payload: unknown) => {
+    result[id] = { kind, payload, updatedAt: '' };
+  };
+  add('profile', 'profile', state.profile);
+  add('meta', 'meta', {
+    ownerUid: state.ownerUid,
+    water: state.water,
+    reviewed: state.reviewed,
+    dismissed: state.dismissed,
+    routineCorrections: state.routineCorrections,
+    trash: state.trash,
+    chat: state.chat,
+    aiMemory: state.aiMemory
+  });
+  for (const kind of ['meals', 'plans', 'sessions', 'body', 'recovery'] as const) {
+    for (const item of state[kind]) add(`${kind}_${item.id}`, kind, item);
+  }
+  return result;
 }
-export function useAppStore(){
- const {user}=useIdentity();const account=user?.uid??'';const storageKey=`ritmo-${account}-v1`;
- const [state,setState]=useState<AppState>(()=>account?{...readStoredState(localStorage,storageKey),ownerUid:account}:emptyState());const ref=useRef(state);
- const [sync,setSync]=useState('Carregando dados da conta…');const [error,setError]=useState('');const [ready,setReady]=useState(!db);const [importing,setImporting]=useState(false);
- const readyRef=useRef(!db),importLock=useRef(false),pending=useRef(0),failed=useRef(false),cloudIds=useRef(new Set<string>()),writes=useRef<Promise<void>>(Promise.resolve());
- const saveLocal=useCallback((next:AppState)=>{
-  try{if(!account||next.ownerUid!==account)throw new Error('owner');writeStoredState(localStorage,storageKey,next);localStorage.setItem('ritmo-active-account',storageKey);ref.current=next;setState(next);return true;}
-  catch{setError('Não foi possível preservar os dados neste aparelho. Nenhum registro foi substituído. Exporte um backup e verifique o armazenamento.');return false;}
- },[account,storageKey]);
- useEffect(()=>{
-  if(!account||!db)return;
-  return onSnapshot(collection(db,'users',account,'records'),{includeMetadataChanges:true},snapshot=>{
-   cloudIds.current=new Set(snapshot.docs.map(item=>item.id));if(!snapshot.metadata.fromCache||!snapshot.empty){readyRef.current=true;setReady(true);}
-   try{if(!snapshot.empty&&!snapshot.metadata.hasPendingWrites&&pending.current===0&&!failed.current&&!importLock.current)saveLocal(restore(snapshot.docs.map(item=>item.data() as RecordValue),account));
-    setSync(snapshot.metadata.hasPendingWrites||pending.current?'Alterações salvas no aparelho · enviando…':failed.current?'Falha de sincronização · backup local preservado':snapshot.metadata.fromCache?'Offline · dados desta conta no aparelho':'Sincronizado com Firebase');
-   }catch{setError('Um registro da nuvem precisa de revisão. Os dados locais foram preservados.');}
-  },()=>{setError('Firebase recusou a leitura. Confira sua conexão e as regras; seus dados locais não foram apagados.');setSync('Falha de sincronização');});
- },[account,saveLocal]);
+
+function restore(items: RecordValue[], ownerUid: string): AppState {
+  const next = emptyState();
+  for (const item of items) {
+    if (item.kind === 'profile') {
+      next.profile = { ...defaultProfile, ...(item.payload as Record<string, any>) };
+    } else if (item.kind === 'meta') {
+      const meta = (item.payload || {}) as Record<string, any>;
+      if (Array.isArray(meta.chat)) {
+        meta.chat = meta.chat
+          .map((c: any, i: number) => ({
+            id: String(c?.id || `msg_${Date.now()}_${i}`),
+            role: c?.role === 'assistant' ? 'assistant' : 'user',
+            text: String(c?.text || '').slice(0, 6000),
+            createdAt: String(c?.createdAt || new Date().toISOString())
+          }))
+          .filter((c: any) => c.text)
+          .slice(-60);
+      }
+      if (meta.aiMemory) {
+        meta.aiMemory = sanitizeMemory(meta.aiMemory);
+      }
+      if (meta.water && typeof meta.water === 'object') {
+        const cleanWater: Record<string, number> = {};
+        for (const [k, v] of Object.entries(meta.water)) {
+          const num = Number(v);
+          if (!isNaN(num) && num >= 0) cleanWater[k] = Math.min(num, 20000);
+        }
+        meta.water = cleanWater;
+      }
+      Object.assign(next, meta);
+    } else if (['meals', 'plans', 'sessions', 'body', 'recovery'].includes(item.kind)) {
+      (next[item.kind as 'meals'] as unknown[]).push(item.payload);
+    }
+  }
+
+  const parsed = stateSchema.safeParse({ ...next, ownerUid, demo: false });
+  if (parsed.success) {
+    return parsed.data;
+  }
+
+  return {
+    ...emptyState(),
+    ...next,
+    ownerUid,
+    demo: false,
+    profile: { ...defaultProfile, ...(next.profile || {}) },
+    aiMemory: sanitizeMemory(next.aiMemory),
+    chat: (next.chat || []).slice(-60),
+    meals: (next.meals || []).filter(m => mealSchema.safeParse(m).success),
+    plans: (next.plans || []).filter(p => planSchema.safeParse(p).success),
+    sessions: (next.sessions || []).filter(s => sessionSchema.safeParse(s).success),
+    body: (next.body || []).filter(b => bodySchema.safeParse(b).success),
+    recovery: (next.recovery || []).filter(r => recoverySchema.safeParse(r).success)
+  };
+}
+
+export function useAppStore() {
+  const { user } = useIdentity();
+  const account = user?.uid ?? '';
+  const storageKey = `ritmo-${account}-v1`;
+  const [state, setState] = useState<AppState>(() =>
+    account ? { ...readStoredState(localStorage, storageKey), ownerUid: account } : emptyState()
+  );
+  const ref = useRef(state);
+  const [sync, setSync] = useState('Carregando dados da conta…');
+  const [error, setError] = useState('');
+  const [ready, setReady] = useState(!db);
+  const [importing, setImporting] = useState(false);
+  const readyRef = useRef(!db),
+    importLock = useRef(false),
+    pending = useRef(0),
+    failed = useRef(false),
+    cloudIds = useRef(new Set<string>()),
+    writes = useRef<Promise<void>>(Promise.resolve());
+  const saveLocal = useCallback(
+    (next: AppState) => {
+      try {
+        if (!account || next.ownerUid !== account) throw new Error('owner');
+        writeStoredState(localStorage, storageKey, next);
+        localStorage.setItem('ritmo-active-account', storageKey);
+        ref.current = next;
+        setState(next);
+        return true;
+      } catch {
+        setError(
+          'Não foi possível preservar os dados neste aparelho. Nenhum registro foi substituído. Exporte um backup e verifique o armazenamento.'
+        );
+        return false;
+      }
+    },
+    [account, storageKey]
+  );
+  useEffect(() => {
+    if (!account || !db) return;
+    return onSnapshot(
+      collection(db, 'users', account, 'records'),
+      { includeMetadataChanges: true },
+      snapshot => {
+        cloudIds.current = new Set(snapshot.docs.map(item => item.id));
+        if (!snapshot.metadata.fromCache || !snapshot.empty) {
+          readyRef.current = true;
+          setReady(true);
+        }
+        try {
+          if (!snapshot.empty && !importLock.current) {
+            const cloudState = restore(
+              snapshot.docs.map(item => item.data() as RecordValue),
+              account
+            );
+            saveLocal(cloudState);
+            setError('');
+          }
+          setSync(
+            snapshot.metadata.hasPendingWrites || pending.current
+              ? 'Alterações salvas no aparelho · enviando…'
+              : failed.current
+              ? 'Falha de sincronização · backup local preservado'
+              : snapshot.metadata.fromCache
+              ? 'Offline · dados desta conta no aparelho'
+              : 'Sincronizado com Firebase'
+          );
+        } catch (err) {
+          console.warn('Erro ao sincronizar com nuvem:', err);
+        }
+      },
+      () => {
+        setError('Firebase recusou a leitura. Confira sua conexão e as regras; seus dados locais não foram apagados.');
+        setSync('Falha de sincronização');
+      }
+    );
+  }, [account, saveLocal]);
  const commit=useCallback((previous:AppState,next:AppState)=>{
   if(!db||!account)return Promise.resolve();const database=db;const before=records(previous),after=records(next);
   const changed=Object.entries(after).filter(([id,value])=>JSON.stringify(value)!==JSON.stringify(before[id])||['profile','meta'].includes(id)&&!cloudIds.current.has(id));

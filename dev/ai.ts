@@ -16,7 +16,7 @@ export function localAiPlugin():Plugin{
    if(!profile.ok||(await profile.json()).fields?.payload?.mapValue?.fields?.aiConsent?.booleanValue!==true){fail(403,'Ative o consentimento de IA e aguarde a sincronização.');return;}
    const now=Date.now(),day=new Date().toISOString().slice(0,10),quota=quotas.get(user.localId);if(quota&&quota.day===day&&quota.count>=100){fail(429,'Limite diário de IA atingido.');return;}quotas.set(user.localId,{day,count:quota?.day===day?quota.count+1:1,last:now});
    let raw='';for await(const chunk of req){raw+=chunk;if(raw.length>8_000_000){fail(413,'Arquivo muito grande.');return;}}
-   const input=validateGatewayRequest(JSON.parse(raw));const response=await callProvider(input,{gemini:process.env.GEMINI_API_KEY||process.env.VITE_GEMINI_API_KEY,jev:process.env.TYPESAFE_API_KEY||process.env.VITE_TYPESAFE_API_KEY});res.statusCode=response.status;res.end(JSON.stringify(response.body));
+   const input=validateGatewayRequest(JSON.parse(raw));const response=await callProvider(input,{deepseek:process.env.DEEPSEEK_API_KEY});res.statusCode=response.status;res.end(JSON.stringify(response.body));
   }catch(err){console.error('Local AI error:',err);fail(503,'IA indisponível no momento. Nenhuma alteração foi executada.');}
  });}};
 }

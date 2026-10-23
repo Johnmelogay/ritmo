@@ -1,9 +1,8 @@
 import { test, expect, type Page } from '@playwright/test';
+import { isolatedAccount } from './isolatedAccount';
 
 test.beforeEach(async ({ page }) => {
-  // Isolated test browser, never the user's signed-in browser or Firebase account.
-  await page.addInitScript(() => localStorage.setItem('ritmo_onboarding_completed', 'true'));
-  await page.route('https://**/*', route => route.abort());
+  await isolatedAccount(page);
 });
 
 async function createDuo(page: Page) {
@@ -33,9 +32,9 @@ test('manual catalogue, bi-set, frictionless numbers, rest, reload and progressi
   await expect(load).toHaveValue('');
   await expect(load).toHaveAttribute('placeholder', '0');
   await expect(load).toHaveCSS('font-size', '16px');
-  const beforeTyping = await page.evaluate(() => localStorage.getItem('ritmo-local-v1'));
+  const beforeTyping = await page.evaluate(() => localStorage.getItem('ritmo-ritmo-isolated-test-v1'));
   await load.fill('22,5');
-  expect(await page.evaluate(() => localStorage.getItem('ritmo-local-v1'))).toBe(beforeTyping);
+  expect(await page.evaluate(() => localStorage.getItem('ritmo-ritmo-isolated-test-v1'))).toBe(beforeTyping);
   await reps.fill('');
   await expect(reps).toHaveValue('');
   await reps.pressSequentially('12');
@@ -44,10 +43,10 @@ test('manual catalogue, bi-set, frictionless numbers, rest, reload and progressi
   await expect(page.getByRole('timer')).toHaveCount(0);
   await page.getByRole('button', { name: 'Concluir série 1 de Rosca Direta com Barra W', exact: true }).click();
   await expect(page.getByRole('timer')).toBeVisible();
-  const timerText = await page.getByRole('timer').locator('strong').innerText();
+  const timerText = await page.getByRole('timer').locator('.timer-dial strong').innerText();
   const nextLoad = page.getByRole('textbox', { name: 'Supino Reto com Barra, série 2, carga', exact: true });
   await nextLoad.fill('35');
-  await expect.poll(() => page.getByRole('timer').locator('strong').innerText()).not.toBe(timerText);
+  await expect.poll(() => page.getByRole('timer').locator('.timer-dial strong').innerText()).not.toBe(timerText);
   await expect(nextLoad).toHaveValue('35');
   await page.getByRole('button', { name: 'Encerrar descanso', exact: true }).click();
   await page.screenshot({ path: `test-results/${test.info().project.name}-training.png`, fullPage: true });
@@ -72,25 +71,36 @@ test('manual catalogue, bi-set, frictionless numbers, rest, reload and progressi
   expect(errors).toEqual([]);
 });
 
-test('daily review uses actual logs and marks changed data as stale (provider mocked)', async ({ page }) => {
+test('replacement is mobile-friendly, accepts comma loads and preserves the original plan', async ({ page }) => {
+  await createDuo(page);
+  await page.getByRole('button', { name: 'Substituir exercício Supino Reto com Barra', exact: true }).click();
+  const modal = page.getByRole('dialog', { name: 'Substituir exercício', exact: true });
+  await modal.getByRole('combobox', { name: 'Novo exercício', exact: true }).fill('Crucifixo Reto');
+  await modal.getByRole('option', { name: /Crucifixo Reto com Halteres/ }).first().click();
+  await modal.getByLabel('Carga inicial (kg)', { exact: true }).fill('22,5');
+  await modal.getByLabel('Repetições', { exact: true }).fill('12');
+  await modal.getByRole('button', { name: 'Tempo curto', exact: true }).click();
+  await expect(modal.getByRole('button', { name: 'Tempo curto', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
+  await page.screenshot({ path: `test-results/${test.info().project.name}-replacement.png`, fullPage: true });
+  await modal.getByRole('button', { name: 'Confirmar substituição', exact: true }).click();
+  await expect(modal).toBeHidden();
+  await expect(page.getByRole('textbox', { name: 'Crucifixo Reto com Halteres, série 1, carga', exact: true })).toHaveValue('22.5');
+  const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('ritmo-ritmo-isolated-test-v1')!));
+  expect(saved.plans[0].exercises[0].name).toBe('Supino Reto com Barra');
+  expect(saved.sessions[0].exercises[0].name).toBe('Crucifixo Reto com Halteres');
+});
+
+test('completed workouts are available in the new Diary without generating an AI review', async ({ page }) => {
   await createDuo(page);
   await page.getByRole('button', { name: 'Concluir série 1 de Supino Reto com Barra', exact: true }).click();
   await page.getByRole('button', { name: 'Finalizar treino' }).click();
-  let summary = '';
-  await page.route('**/v1/systemone', route => route.fulfill({ status: 503, contentType: 'application/json', body: '{}' }));
-  await page.route('https://generativelanguage.googleapis.com/**', async route => {
-    summary = route.request().postDataJSON().contents[0].parts[0].text;
-    await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ candidates: [{ content: { parts: [{ text: JSON.stringify({ title: 'Revisão simulada para teste', body: 'Seu treino foi registrado. Este conteúdo testa o fluxo, não o provedor real.' }) }] } }] }) });
-  });
   await page.goto('/#home');
-  await page.getByRole('button', { name: 'Avaliar meu dia com IA' }).click();
-  await expect(page.getByRole('heading', { name: 'Revisão simulada para teste' })).toBeVisible();
-  expect(summary).toContain('Supino Reto com Barra');
-  expect(summary).toContain('waterMl');
-  expect(summary).toContain('exerciseProgress');
-  expect(summary).toContain('reviewed');
-  // Change a daily log without navigating away from the generated review.
+  await expect(page.getByRole('button', { name: 'Avaliar meu dia com IA' })).toHaveCount(0);
   await page.getByRole('button', { name: 'Adicionar 250 ml de água' }).click();
-  await expect(page.getByText('Seus registros mudaram. Atualize a revisão para considerar os novos dados.')).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Revisão simulada para teste' })).toBeHidden();
+  await page.getByRole('button', { name: 'Diário', exact: true }).click();
+  await expect(page.getByText('Teste isolado · Dupla', { exact: true })).toBeVisible();
+  await page.getByText('Exercícios, séries e cargas', { exact: true }).click();
+  await expect(page.getByText('Supino Reto com Barra', { exact: false })).toBeVisible();
+  await expect(page.getByText('0,25 L · total do dia', { exact: true })).toBeVisible();
 });
